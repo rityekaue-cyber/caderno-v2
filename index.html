@@ -936,16 +936,16 @@ function RichEditor({ value, onChange, placeholder }) {
           background: C.surface,
         }}
       />
-      <style>{`
-        [contenteditable]:empty:before {
+      <style dangerouslySetInnerHTML={{__html: `
+        div[contenteditable]:empty:before {
           content: attr(data-placeholder);
           color: #444458;
           pointer-events: none;
         }
-        [contenteditable] h3 { color: #e8d8ff; margin: 8px 0 4px; font-size: 14px; }
-        [contenteditable] ul { padding-left: 20px; }
-        [contenteditable] li { margin: 3px 0; }
-      `}</style>
+        div[contenteditable] h3 { color: #e8d8ff; margin: 8px 0 4px; font-size: 14px; }
+        div[contenteditable] ul { padding-left: 20px; }
+        div[contenteditable] li { margin: 3px 0; }
+      `}} />
     </div>
   );
 }
@@ -1003,8 +1003,6 @@ function Adicionar({data,caderno,upd,onAdded}) {
         <div><Label>MACETE</Label><input value={form.anotacao} onChange={e=>F("anotacao",e.target.value)} placeholder="Dica para memorizar..." style={inp}/></div>
       </div>
       <div style={{marginBottom:10}}><Label>FONTE / BANCA</Label><input value={form.fonte||""} onChange={e=>F("fonte",e.target.value)} placeholder="Ex: CESPE 2023, FGV 2022, Simulado..." style={inp}/></div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10
-      </div>
       <div style={{marginBottom:20}}><Label>IMAGEM</Label><div onDrop={handleDrop} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.border2}`,borderRadius:10,padding:"16px",textAlign:"center",cursor:"pointer",background:C.surface2}}>{form.imagem?<div><img src={form.imagem} alt="preview" style={{maxHeight:100,borderRadius:8}}/><button onClick={e=>{e.stopPropagation();F("imagem",null);}} style={{display:"block",margin:"6px auto 0",...btn("#2e0c0c","#501a1a","#f87171"),fontSize:11}}>Remover</button></div>:<p style={{fontSize:12,color:C.textDim,margin:0}}>🖼 Arraste ou clique</p>}</div><input ref={fileRef} type="file" accept="image/*" onChange={handleImg} style={{display:"none"}}/></div>
       <button onClick={salvar} style={{width:"100%",background:"linear-gradient(135deg,#2a1060,#1a2a60)",border:"1px solid #4a2a9e",color:"#d8c8ff",padding:"14px",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>➕ Salvar no Caderno "{caderno}"</button>
     </div>
