@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Caderno de Erros — TCE-RJ</title>
+
+  <!-- React + Babel -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+    import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+    // ╔══════════════════════════════════════════════════════╗
+    // ║  ⚠️  COLE AQUI SUAS CHAVES DO FIREBASE (Etapa 3.6)  ║
+    // ╚══════════════════════════════════════════════════════╝
+    const firebaseConfig = {
+      apiKey:            "AIzaSyDWzvDq0vrT7o6G8M7mgFS8KvDTS3dqaAs",
+      authDomain:        "caderno-tce-rj.firebaseapp.com",
+      projectId:         "caderno-tce-rj",
+      storageBucket:     "caderno-tce-rj.firebasestorage.app",
+      messagingSenderId: "454987888166",
+      appId:             "1:454987888166:web:f5be0fa72bf213bf2fd8e7"
+    };
+
+    const app  = initializeApp(firebaseConfig);
+    const db   = getFirestore(app);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+
+    // Expor para o React (window bridge)
+    window._firebase = {
+      async login() {
+        const result = await signInWithPopup(auth, provider);
+        return result.user;
+      },
+      async logout() {
+        await signOut(auth);
+      },
+      onAuthChanged(cb) {
+        return onAuthStateChanged(auth, cb);
+      },
+      async saveData(uid, data) {
+        await setDoc(doc(db, "cadernos", uid), { data: JSON.stringify(data) });
+      },
+      async loadData(uid) {
+        const snap = await getDoc(doc(db, "cadernos", uid));
+        if (snap.exists()) return JSON.parse(snap.data().data);
+        return null;
+      },
+      onDataChange(uid, cb) {
+        return onSnapshot(doc(db, "cadernos", uid), snap => {
+          if (snap.exists()) cb(JSON.parse(snap.data().data));
+        });
+      }
+    };
+
+    window.dispatchEvent(new Event("firebase-ready"));
+  </script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #08080f; color: #ddd8cc; font-family: Georgia, serif; }
+    #root { min-height: 100vh; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0d0d1a; }
+    ::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+    input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+const NIVEIS = ["Acender", "Brilhar", "Clarear", "Iluminar"];
+const NIVEL_CORES = { Acender: "#ef4444", Brilhar: "#f97316", Clarear: "#eab308", Iluminar: "#22c55e" };
+const NIVEL_DIAS = { Acender: 1, Brilhar: 3, Clarear: 7, Iluminar: 30 };
+const DIAS_SEMANA_FULL = ["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"];
+const DIAS_SEMANA = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+const TURNOS = ["Manhã","Tarde","Noite"];
+const PRIORIDADES = ["alta","media","baixa"];
+const PRIORIDADE_COR = { alta:"#ef4444", media:"#f97316", baixa:"#6b7280" };
+const PRIORIDADE_LABEL = { alta:"🔴 Alta", media:"🟡 Média", baixa:"⚪ Baixa" };
+const DESTINO_CONFIG = {
+  anki:       { cor:"#22c55e", icon:"🟢", label:"Pronto → Anki",       bg:"#071a10", border:"#0d3020" },
+  notebooklm: { cor:"#60a5fa", icon:"🔵", label:"Pronto → NotebookLM", bg:"#071828", border:"#0d2040" },
+  arquivada:  { cor:"#a78bfa", icon:"✅", label:"Dominada / Arquivada", bg:"#120d24", border:"#2a1e50" },
+};
+const TIPO_ERRO_CONFIG = {
+  detalhe:     { cor:"#60a5fa", label:"Erro de Detalhe",     desc:"Entendi o tema, mas errei um ponto específico", icon:"🔍" },
+  compreensao: { cor:"#f97316", label:"Erro de Compreensão", desc:"Não domino o assunto — preciso estudar em profundidade", icon:"📖" },
+};
+
+const hoje = () => new Date().toISOString().split("T")[0];
+const hojeObj = () => new Date();
+
+function defaultData() {
+  const hj = hoje();
+  return {
+    cadernos: ["TCE-RJ"], cadernoPadrao: "TCE-RJ",
+    questoes: [
+      { id:1, caderno:"TCE-RJ", tipo:"multipla", disciplina:"Direito Administrativo", tema:"Atos Administrativos", topico:"Vinculação e Discricionariedade",
+        enunciado:"Os atos administrativos vinculados são aqueles em que a lei estabelece todos os requisitos para sua prática. Sobre o controle pelo Poder Judiciário, é correto afirmar:",
+        alternativas:["A) O Judiciário não pode controlar atos vinculados","B) O Judiciário pode anular atos vinculados contrários à lei","C) O Judiciário pode substituir o mérito administrativo","D) Atos vinculados não admitem anulação"],
+        gabarito:"B) O Judiciário pode anular atos vinculados contrários à lei.", suaResposta:"Confundi com atos discricionários", anotacao:"Vinculado = sem liberdade = controle judicial pleno de legalidade",
+        nivel:0, proximaRevisao:hj, historico:[], criadoEm:hj, imagem:null, tipoErro:"compreensao", acertosConsecutivos:0, destino:null, fonte:"" },
+    ],
+    arvore: { "TCE-RJ": { "Direito Administrativo": { concluida:false, temas:{ "Atos Administrativos":{ concluida:false, topicos:{ "Vinculação e Discricionariedade":{ concluida:false, subtopicos:[] } } } } } } },
+    metas: { "TCE-RJ": { 0:{horas:0,questoes:0,descanso:true}, 1:{horas:2,questoes:20,descanso:false}, 2:{horas:2,questoes:20,descanso:false}, 3:{horas:2,questoes:20,descanso:false}, 4:{horas:2,questoes:20,descanso:false}, 5:{horas:2,questoes:20,descanso:false}, 6:{horas:1,questoes:10,descanso:false} } },
+    prioridadeBanca: { "TCE-RJ": { "Direito Administrativo":"alta","Contabilidade Pública":"alta","Direito Constitucional":"alta","Auditoria Governamental":"alta","Controle Externo":"alta","Direito Financeiro":"media","Português":"media","Raciocínio Lógico":"media","Informática":"baixa" } },
+    sessoes:[], diasAcesso:[hj], lembretes:[],
+  };
+}
+
+function scoreUrgencia(q, pb, caderno) {
+  const p = (pb?.[caderno]||{})[q.disciplina]||"baixa";
+  return {alta:3,media:2,baixa:1}[p] * ({0:4,1:3,2:2,3:1}[q.nivel]||1);
+}
+function calcularDestino(q) {
+  if (q.nivel===3) return "arquivada";
+  if (q.acertosConsecutivos>=3) return q.tipoErro==="detalhe"?"anki":"notebooklm";
+  return null;
+}
+function getDiasDoMes(ano,mes) {
+  const dias=[]; const primeiro=new Date(ano,mes,1); const ultimo=new Date(ano,mes+1,0);
+  for(let i=1;i<=ultimo.getDate();i++) dias.push(new Date(ano,mes,i));
+  return {dias, primeiroDiaSemana:primeiro.getDay()};
+}
+function formatMin(m) { if(m<60) return `${m}min`; return `${Math.floor(m/60)}h${m%60>0?String(m%60).padStart(2,"0")+"min":""}`; }
+function pendentesHoje(questoes,caderno) { const hj=hoje(); return questoes.filter(q=>q.caderno===caderno&&q.proximaRevisao<=hj&&q.destino!=="arquivada"); }
+
+const C = { bg:"#08080f",surface:"#0d0d1a",surface2:"#111120",border:"#1a1a2e",border2:"#22223a",text:"#ddd8cc",textDim:"#666680",textDim2:"#444458",accent:"#a78bfa",accentDark:"#7c3aed" };
+const inp = { background:C.surface,border:`1px solid ${C.border2}`,color:C.text,padding:"9px 12px",borderRadius:8,fontSize:13,outline:"none",width:"100%",boxSizing:"border-box",fontFamily:"inherit" };
+const btn = (bg,border,color) => ({ background:bg,border:`1px solid ${border}`,color,padding:"9px 16px",borderRadius:8,cursor:"pointer",fontSize:13,fontFamily:"inherit",fontWeight:600 });
+function Label({children,color}) { return <p style={{fontSize:11,color:color||C.textDim,marginBottom:4,fontWeight:700,letterSpacing:0.5}}>{children}</p>; }
+function Tag({children,bg,color,border}) { return <span style={{fontSize:10,padding:"2px 8px",borderRadius:10,background:bg||C.surface2,color:color||C.textDim,border:`1px solid ${border||C.border}`}}>{children}</span>; }
+function Pill({children,cor}) { return <span style={{fontSize:10,padding:"2px 8px",borderRadius:10,background:cor+"18",color:cor,border:`1px solid ${cor}35`}}>{children}</span>; }
+
+// ─── LOGIN SCREEN ─────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin, loading }) {
+  return (
+    <div style={{ minHeight:"100vh", background:C.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:20, padding:48, textAlign:"center", maxWidth:400, width:"90%" }}>
+        <div style={{ fontSize:52, marginBottom:16 }}>📓</div>
+        <h1 style={{ fontSize:22, fontWeight:700, color:"#f0e6d3", marginBottom:8 }}>Caderno de Erros</h1>
+        <p style={{ fontSize:13, color:C.textDim, marginBottom:8 }}>TCE-RJ · Auditor de Controle Externo</p>
+        <p style={{ fontSize:11, color:C.textDim2, marginBottom:32, lineHeight:1.6 }}>Seus dados ficam salvos na nuvem e sincronizados em qualquer dispositivo.</p>
+        <button onClick={onLogin} disabled={loading}
+          style={{ ...btn("#1a1a3e","#4a3a9e",C.accent), width:"100%", padding:"14px", fontSize:15, display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
+          {loading ? "Entrando..." : <><img src="https://www.google.com/favicon.ico" width={18} height={18} alt="" style={{borderRadius:3}} /> Entrar com Google</>}
+        </button>
+        <p style={{ fontSize:10, color:C.textDim2, marginTop:16 }}>Seus dados são privados e ficam vinculados à sua conta Google.</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+function App() {
+  const [user, setUser]               = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [data, setData]               = useState(null);
+  const [syncStatus, setSyncStatus]   = useState("ok"); // "ok" | "saving" | "error"
+  const [aba, setAba]                 = useState("dashboard");
+  const [caderno, setCaderno]         = useState("TCE-RJ");
+  const [sessaoInicio]                = useState(() => Date.now());
+  const [sessaoQuestoes, setSessaoQuestoes] = useState(0);
+  const [ticker, setTicker]           = useState(0);
+  const saveTimeout                   = useRef(null);
+  const fb                            = window._firebase;
+
+  // Auth listener
+  useEffect(() => {
+    const unsub = fb.onAuthChanged(u => { setUser(u); setAuthLoading(false); });
+    return unsub;
+  }, []);
+
+  // Carregar dados quando user logar
+  useEffect(() => {
+    if (!user) { setData(null); return; }
+    fb.loadData(user.uid).then(d => {
+      setData(d || defaultData());
+      // Registrar acesso
+      const hj = hoje();
+      setData(prev => {
+        const base = d || defaultData();
+        if (!base.diasAcesso?.includes(hj)) return { ...base, diasAcesso:[...(base.diasAcesso||[]),hj] };
+        return base;
+      });
+    });
+  }, [user]);
+
+  // Salvar na nuvem com debounce (1.5s após última mudança)
+  useEffect(() => {
+    if (!user || !data) return;
+    setSyncStatus("saving");
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(() => {
+      fb.saveData(user.uid, data)
+        .then(() => setSyncStatus("ok"))
+        .catch(() => setSyncStatus("error"));
+    }, 1500);
+    return () => clearTimeout(saveTimeout.current);
+  }, [data, user]);
+
+  useEffect(() => { const t = setInterval(() => setTicker(x=>x+1), 30000); return ()=>clearInterval(t); }, []);
+
+  const upd = useCallback((fn) => setData(d => fn(d)), []);
+
+  async function handleLogin() {
+    setLoginLoading(true);
+    try { await fb.login(); } catch(e) { alert("Erro ao entrar: " + e.message); }
+    setLoginLoading(false);
+  }
+
+  if (authLoading) return (
+    <div style={{ minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center" }}>
+      <p style={{ color:C.textDim, fontSize:14 }}>Carregando...</p>
+    </div>
+  );
+
+  if (!user) return <LoginScreen onLogin={handleLogin} loading={loginLoading} />;
+  if (!data) return (
+    <div style={{ minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center" }}>
+      <p style={{ color:C.textDim, fontSize:14 }}>Carregando seus dados da nuvem... ☁️</p>
+    </div>
+  );
+
+  const minHoje = Math.floor((Date.now()-sessaoInicio)/60000);
+  const metaHoje = (data.metas?.[caderno]||{})[hojeObj().getDay()]||{horas:0,questoes:0,descanso:false};
+  const pendentes = pendentesHoje(data.questoes||[],caderno);
+  const prontas = (data.questoes||[]).filter(q=>q.caderno===caderno&&q.destino&&q.destino!=="arquivada");
+  const lembretesPend = (data.lembretes||[]).filter(l=>l.caderno===caderno&&!l.feito).length;
+
+  const tabs = [
+    {id:"dashboard", icon:"🏠", label:"Dashboard"},
+    {id:"revisao",   icon:"🔁", label:"Revisar",   badge:pendentes.length},
+    {id:"adicionar", icon:"➕", label:"Adicionar"},
+    {id:"lista",     icon:"📋", label:"Lista"},
+    {id:"exportar",  icon:"📤", label:"Exportar",  badge:prontas.length},
+    {id:"banca",     icon:"🎯", label:"Banca"},
+    {id:"metas",     icon:"⏱",  label:"Metas"},
+    {id:"semana",    icon:"📊", label:"Semana"},
+    {id:"lembretes", icon:"🔔", label:"Lembretes", badge:lembretesPend},
+  ];
+
+  return (
+    <div style={{ minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'Georgia',serif",display:"flex",flexDirection:"column" }}>
+      {/* TOP BAR */}
+      <div style={{ background:"linear-gradient(160deg,#0c0c1e,#0f1428)",borderBottom:`1px solid ${C.border}`,padding:"12px 20px",flexShrink:0 }}>
+        <div style={{ maxWidth:1100,margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10 }}>
+          <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+            <span style={{ fontSize:17,fontWeight:700,color:"#f0e6d3",letterSpacing:0.5 }}>📓 Caderno de Erros</span>
+            <span style={{ fontSize:10,color:C.textDim,background:C.surface2,padding:"2px 8px",borderRadius:10,border:`1px solid ${C.border}` }}>v3 Firebase</span>
+            {/* Sync status */}
+            <span style={{ fontSize:10,color:syncStatus==="ok"?"#4ade80":syncStatus==="saving"?"#f97316":"#ef4444" }}>
+              {syncStatus==="ok"?"☁️ sincronizado":syncStatus==="saving"?"⟳ salvando...":"⚠️ erro ao salvar"}
+            </span>
+          </div>
+          <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+            <span style={{ fontSize:11,color:C.textDim,background:C.surface2,padding:"4px 10px",borderRadius:8,border:`1px solid ${C.border}` }}>⏱ {formatMin(minHoje)} · {sessaoQuestoes}q</span>
+            {/* User info */}
+            <div style={{ display:"flex",alignItems:"center",gap:8,background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 10px" }}>
+              {user.photoURL && <img src={user.photoURL} width={20} height={20} style={{borderRadius:"50%"}} alt="" />}
+              <span style={{ fontSize:11,color:C.textDim }}>{user.displayName?.split(" ")[0]}</span>
+              <button onClick={()=>fb.logout()} style={{ background:"none",border:"none",color:C.textDim2,cursor:"pointer",fontSize:11 }}>sair</button>
+            </div>
+            <CadernoSelector data={data} caderno={caderno} setCaderno={setCaderno} upd={upd} />
+          </div>
+        </div>
+      </div>
+
+      {/* NAV */}
+      <div style={{ background:C.surface,borderBottom:`1px solid ${C.border}`,flexShrink:0,overflowX:"auto" }}>
+        <div style={{ maxWidth:1100,margin:"0 auto",display:"flex" }}>
+          {tabs.map(t=>(
+            <button key={t.id} onClick={()=>setAba(t.id)}
+              style={{ background:"none",border:"none",borderBottom:aba===t.id?`2px solid ${C.accent}`:"2px solid transparent",color:aba===t.id?C.accent:C.textDim,padding:"11px 12px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:aba===t.id?700:400,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4 }}>
+              {t.icon} {t.label}
+              {t.badge>0&&<span style={{ background:C.accent,color:"#0a0a12",fontSize:9,padding:"1px 5px",borderRadius:10,fontWeight:700 }}>{t.badge}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* CONTENT */}
+      <div style={{ flex:1,overflowY:"auto",padding:"20px" }}>
+        <div style={{ maxWidth:1100,margin:"0 auto" }}>
+          {aba==="dashboard"  && <Dashboard  data={data} caderno={caderno} minHoje={minHoje} metaHoje={metaHoje} sessaoQuestoes={sessaoQuestoes} setAba={setAba} />}
+          {aba==="revisao"    && <Revisao    data={data} caderno={caderno} upd={upd} onQuestaoFeita={()=>setSessaoQuestoes(q=>q+1)} />}
+          {/* BOTÃO FLUTUANTE — só na revisão */}
+          {aba==="revisao"&&<button onClick={()=>setAba("adicionar")} title="Adicionar nova questão"
+            style={{position:"fixed",bottom:28,right:28,width:52,height:52,borderRadius:"50%",background:"linear-gradient(135deg,#7c3aed,#1e3a5f)",border:"2px solid #a78bfa",color:"#fff",fontSize:22,cursor:"pointer",boxShadow:"0 4px 24px #7c3aed60",zIndex:100,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            ➕
+          </button>}
+          {aba==="adicionar"  && <Adicionar  data={data} caderno={caderno} upd={upd} onAdded={()=>setAba("revisao")} />}
+          {aba==="lista"      && <Lista      data={data} caderno={caderno} upd={upd} />}
+          {aba==="exportar"   && <Exportar   data={data} caderno={caderno} upd={upd} />}
+          {aba==="banca"      && <BancaConfig data={data} caderno={caderno} upd={upd} />}
+          {aba==="metas"      && <Metas      data={data} caderno={caderno} upd={upd} />}
+          {aba==="semana"     && <Semana     data={data} caderno={caderno} upd={upd} />}
+          {aba==="lembretes"  && <Lembretes  data={data} caderno={caderno} upd={upd} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CADERNO SELECTOR ─────────────────────────────────────────────────────────
+function CadernoSelector({data,caderno,setCaderno,upd}) {
+  const [novo,setNovo]=useState(""); const [open,setOpen]=useState(false);
+  return (
+    <div style={{position:"relative"}}>
+      <button onClick={()=>setOpen(!open)} style={{background:C.surface2,border:`1px solid ${C.border2}`,color:C.accent,padding:"5px 12px",borderRadius:8,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>📒 {caderno} ▾</button>
+      {open&&(
+        <div style={{position:"absolute",right:0,top:"110%",background:"#12121e",border:`1px solid ${C.border2}`,borderRadius:10,padding:12,zIndex:200,minWidth:200,boxShadow:"0 8px 32px #000c"}}>
+          {data.cadernos.map(c=><div key={c} onClick={()=>{setCaderno(c);setOpen(false);}} style={{padding:"7px 10px",borderRadius:6,cursor:"pointer",fontSize:13,color:c===caderno?C.accent:C.text,background:c===caderno?C.border:"transparent"}}>📒 {c}</div>)}
+          <div style={{borderTop:`1px solid ${C.border}`,marginTop:8,paddingTop:8}}>
+            <input value={novo} onChange={e=>setNovo(e.target.value)} placeholder="Novo caderno..." style={{...inp,fontSize:12,marginBottom:6}} onKeyDown={e=>{if(e.key==="Enter"&&novo.trim()){upd(d=>({...d,cadernos:[...d.cadernos,novo.trim()]}));setCaderno(novo.trim());setNovo("");setOpen(false);}}}/>
+            <button onClick={()=>{if(novo.trim()){upd(d=>({...d,cadernos:[...d.cadernos,novo.trim()]}));setCaderno(novo.trim());setNovo("");setOpen(false);}}} style={{...btn(C.border,C.border2,C.accent),width:"100%",fontSize:12}}>+ Criar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function Dashboard({data,caderno,minHoje,metaHoje,sessaoQuestoes,setAba}) {
+  const [mesOffset,setMesOffset]=useState(0);
+  const hj=hoje(); const agora=hojeObj();
+  const ano=new Date(agora.getFullYear(),agora.getMonth()+mesOffset,1).getFullYear();
+  const mes=new Date(agora.getFullYear(),agora.getMonth()+mesOffset,1).getMonth();
+  const {dias,primeiroDiaSemana}=getDiasDoMes(ano,mes);
+  const diasAcesso=data.diasAcesso||[];
+  const diasNoMes=diasAcesso.filter(d=>d.startsWith(`${ano}-${String(mes+1).padStart(2,"0")}`));
+  const qc=(data.questoes||[]).filter(q=>q.caderno===caderno);
+  const pendentes=pendentesHoje(data.questoes||[],caderno);
+  const prontas=qc.filter(q=>q.destino&&q.destino!=="arquivada");
+  const arquivadas=qc.filter(q=>q.destino==="arquivada");
+  const urgentes=[...pendentes].sort((a,b)=>scoreUrgencia(b,data.prioridadeBanca,caderno)-scoreUrgencia(a,data.prioridadeBanca,caderno)).slice(0,4);
+  const metaHorasMin=metaHoje.horas*60;
+  const pctTempo=metaHorasMin>0?Math.min(100,Math.round((minHoje/metaHorasMin)*100)):0;
+  const pctQ=metaHoje.questoes>0?Math.min(100,Math.round((sessaoQuestoes/metaHoje.questoes)*100)):0;
+  const nomeMes=new Date(ano,mes,1).toLocaleDateString("pt-BR",{month:"long",year:"numeric"});
+
+  // ① STREAK
+  const streak = (() => {
+    let s=0; const hj2=hoje();
+    const sorted=[...new Set(diasAcesso)].sort().reverse();
+    let esperado=new Date(hj2);
+    for(const d of sorted){
+      const ds=esperado.toISOString().split("T")[0];
+      if(d===ds){s++;esperado.setDate(esperado.getDate()-1);}
+      else if(d<ds) break;
+    }
+    return s;
+  })();
+
+  // ⑤ % acerto geral essa semana
+  const diasSem7 = Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-i);return d.toISOString().split("T")[0];});
+  const histSemana = qc.flatMap(q=>(q.historico||[]).filter(h=>diasSem7.includes(h.data)));
+  const acertosSem = histSemana.filter(h=>h.acertou).length;
+  const totalSem = histSemana.length;
+  const pctAcertoSem = totalSem>0?Math.round((acertosSem/totalSem)*100):null;
+
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+      {/* STREAK + % ACERTO GERAL */}
+      <div style={{gridColumn:"span 2",display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div style={{background:"linear-gradient(135deg,#1a0f2e,#0f1a2e)",border:`1px solid #3a2a5e`,borderRadius:14,padding:"16px 20px",display:"flex",alignItems:"center",gap:16}}>
+          <div style={{fontSize:36}}>🔥</div>
+          <div>
+            <div style={{fontSize:32,fontWeight:700,color:streak>0?"#f97316":C.textDim,lineHeight:1}}>{streak}</div>
+            <div style={{fontSize:12,color:C.textDim,marginTop:2}}>{streak===1?"dia seguido":streak>1?"dias seguidos":"Comece hoje!"}</div>
+          </div>
+          {streak>=7&&<div style={{marginLeft:"auto",fontSize:11,color:"#f97316",background:"#2a1a0a",padding:"4px 10px",borderRadius:20,border:"1px solid #f9731630"}}>🏆 {streak>=30?"Mês!":streak>=14?"2 semanas!":"1 semana!"}</div>}
+        </div>
+        <div style={{background:"linear-gradient(135deg,#0a1a2a,#0a2a1a)",border:`1px solid ${pctAcertoSem>=70?"#22c55e30":pctAcertoSem>=50?"#eab30830":"#ef444430"}`,borderRadius:14,padding:"16px 20px",display:"flex",alignItems:"center",gap:16}}>
+          <div style={{fontSize:36}}>{pctAcertoSem===null?"📊":pctAcertoSem>=70?"🎯":pctAcertoSem>=50?"📈":"💪"}</div>
+          <div>
+            <div style={{fontSize:32,fontWeight:700,color:pctAcertoSem===null?C.textDim:pctAcertoSem>=70?"#22c55e":pctAcertoSem>=50?"#eab308":"#ef4444",lineHeight:1}}>{pctAcertoSem!==null?`${pctAcertoSem}%`:"–"}</div>
+            <div style={{fontSize:12,color:C.textDim,marginTop:2}}>{totalSem>0?`${acertosSem}/${totalSem} questões essa semana`:"Sem revisões essa semana"}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* PIPELINE */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,gridColumn:"span 2"}}>
+        <p style={{margin:"0 0 14px",fontSize:13,fontWeight:700,color:C.accent}}>⚡ Pipeline — {caderno}</p>
+        <div style={{display:"flex",gap:4,alignItems:"stretch",flexWrap:"wrap"}}>
+          {[{icon:"📝",label:"No Caderno",count:qc.filter(q=>!q.destino).length,cor:C.textDim},{icon:"🔵",label:"→ NotebookLM",count:prontas.filter(q=>q.destino==="notebooklm").length,cor:"#60a5fa"},{icon:"🟢",label:"→ Anki",count:prontas.filter(q=>q.destino==="anki").length,cor:"#22c55e"},{icon:"✅",label:"Arquivadas",count:arquivadas.length,cor:C.accent}].map((item,i)=>(
+            <div key={i} style={{flex:1,background:C.surface2,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 10px",textAlign:"center",minWidth:80}}>
+              <div style={{fontSize:18,marginBottom:4}}>{item.icon}</div>
+              <div style={{fontSize:20,fontWeight:700,color:item.cor}}>{item.count}</div>
+              <div style={{fontSize:10,color:C.textDim2,marginTop:2}}>{item.label}</div>
+            </div>
+          ))}
+        </div>
+        {prontas.length>0&&<button onClick={()=>setAba("exportar")} style={{...btn("#071a10","#0d3020","#4ade80"),marginTop:12,fontSize:12,width:"100%"}}>📤 {prontas.length} pronta(s) para exportar</button>}
+      </div>
+
+      {/* URGENTES */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+        <p style={{margin:"0 0 14px",fontSize:13,fontWeight:700,color:"#ef4444"}}>🔴 Revisar Agora</p>
+        {urgentes.length===0?<p style={{fontSize:13,color:"#22c55e",textAlign:"center",padding:"20px 0"}}>✅ Nada urgente!</p>:urgentes.map(q=>{
+          const pb=(data.prioridadeBanca?.[caderno]||{})[q.disciplina]||"baixa";
+          return <div key={q.id} style={{background:C.surface2,border:`1px solid ${C.border}`,borderLeft:`3px solid ${NIVEL_CORES[NIVEIS[q.nivel]]}`,borderRadius:8,padding:"10px 12px",marginBottom:8}}>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:5}}><Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill><Pill cor={NIVEL_CORES[NIVEIS[q.nivel]]}>{NIVEIS[q.nivel]}</Pill></div>
+            <p style={{margin:0,fontSize:12,color:C.text}}>{q.disciplina} · {q.tema}</p>
+            <p style={{margin:"3px 0 0",fontSize:11,color:C.textDim}}>{q.enunciado.slice(0,80)}...</p>
+          </div>;
+        })}
+      </div>
+
+      {/* CALENDÁRIO */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.accent}}>📅 Constância</span>
+          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+            <button onClick={()=>setMesOffset(m=>m-1)} style={{background:"none",border:"none",color:C.textDim,cursor:"pointer",fontSize:16,padding:"0 4px"}}>‹</button>
+            <span style={{fontSize:10,color:C.textDim,textTransform:"capitalize"}}>{nomeMes}</span>
+            <button onClick={()=>setMesOffset(m=>Math.min(0,m+1))} style={{background:"none",border:"none",color:C.textDim,cursor:"pointer",fontSize:16,padding:"0 4px"}}>›</button>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:10}}>
+          {DIAS_SEMANA.map(d=><div key={d} style={{textAlign:"center",fontSize:9,color:C.textDim2}}>{d}</div>)}
+          {Array(primeiroDiaSemana).fill(null).map((_,i)=><div key={"e"+i}/>)}
+          {dias.map(d=>{const ds=d.toISOString().split("T")[0];const estudou=diasAcesso.includes(ds);const ehHoje=ds===hj;const futuro=ds>hj;return <div key={ds} style={{aspectRatio:"1",borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,background:futuro?"transparent":estudou?"#1a4a2a":"#2a0f0f",color:ehHoje?"#fff":futuro?C.textDim2:estudou?"#4ade80":"#f87171",border:ehHoje?`1px solid ${C.accent}`:"1px solid transparent",fontWeight:ehHoje?700:400}}>{d.getDate()}</div>;})}
+        </div>
+        <div style={{fontSize:12,color:"#4ade80",textAlign:"center"}}>✅ {diasNoMes.length} dias estudados esse mês</div>
+      </div>
+
+      {/* META */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+        <p style={{margin:"0 0 14px",fontSize:13,fontWeight:700,color:C.accent}}>🎯 Meta — {DIAS_SEMANA_FULL[hojeObj().getDay()]}</p>
+        {metaHoje.descanso?<div style={{textAlign:"center",padding:"20px 0"}}><div style={{fontSize:32,marginBottom:8}}>😴</div><p style={{fontSize:13,color:"#60a5fa",margin:0}}>Dia de descanso!</p></div>:<div>
+          {[["⏱ Tempo",minHoje,metaHoje.horas*60,pctTempo,"#60a5fa",formatMin],["📝 Questões",sessaoQuestoes,metaHoje.questoes,pctQ,"#f97316",v=>`${v}`]].map(([l,v,m,p,cor,fmt])=>(
+            <div key={l} style={{marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:C.textDim}}>{l}</span><span style={{color:cor,fontWeight:700}}>{fmt(v)} / {fmt(m)}</span></div>
+              <div style={{background:C.border,borderRadius:4,height:7}}><div style={{background:cor,height:"100%",width:`${p}%`,borderRadius:4,transition:"width .4s"}}/></div>
+            </div>
+          ))}
+          <div style={{padding:"8px 12px",background:C.surface2,borderRadius:8,fontSize:11,color:C.textDim}}>🔥 {pendentes.length} questões pendentes</div>
+        </div>}
+      </div>
+
+      {/* DOMÍNIO */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20}}>
+        <p style={{margin:"0 0 14px",fontSize:13,fontWeight:700,color:C.accent}}>✨ Domínio Cards</p>
+        {NIVEIS.map((n,i)=>{const cnt=qc.filter(q=>NIVEIS[q.nivel]===n&&q.destino!=="arquivada").length;const pct=qc.length>0?Math.round((cnt/qc.length)*100):0;return(<div key={n} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{display:"flex",alignItems:"center",gap:6}}><span style={{width:7,height:7,borderRadius:"50%",background:NIVEL_CORES[n],display:"inline-block"}}/>{n}</span><span style={{color:NIVEL_CORES[n],fontWeight:700}}>{cnt}</span></div><div style={{background:C.border,borderRadius:4,height:5}}><div style={{background:NIVEL_CORES[n],height:"100%",width:`${pct}%`,borderRadius:4,transition:"width .4s"}}/></div></div>);})}
+        <p style={{fontSize:11,color:C.textDim,textAlign:"center",margin:"10px 0 0"}}>{qc.filter(q=>q.destino!=="arquivada").length} ativas · {arquivadas.length} arquivadas</p>
+      </div>
+
+      {/* SEMANA POR MATÉRIA */}
+      <SemanaDashboard data={data} caderno={caderno} qc={qc} />
+
+    </div>
+  );
+}
+
+
+// ─── HELPERS SEMANA ───────────────────────────────────────────────────────────
+const HUMOR_CONFIG = [
+  { value: 1, label: "😟 Perdida",     cor: "#ef4444", bg: "#2a0f0f" },
+  { value: 2, label: "😐 Insegura",    cor: "#f97316", bg: "#2a1a0a" },
+  { value: 3, label: "🙂 Razoável",    cor: "#eab308", bg: "#2a200a" },
+  { value: 4, label: "😊 Confiante",   cor: "#22c55e", bg: "#0a2a10" },
+  { value: 5, label: "🔥 Dominando!",  cor: "#a78bfa", bg: "#1a0a2a" },
+];
+
+function getSemanaAtual() {
+  const hoje = new Date();
+  const diaSemana = hoje.getDay(); // 0=dom
+  const inicio = new Date(hoje);
+  inicio.setDate(hoje.getDate() - diaSemana); // domingo
+  const dias = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(inicio);
+    d.setDate(inicio.getDate() + i);
+    dias.push(d.toISOString().split("T")[0]);
+  }
+  return dias;
+}
+
+// Mini termômetro no dashboard
+function SemanaDashboard({ data, caderno, qc }) {
+  const diasSemana = getSemanaAtual();
+  const humor = (data.humorSemana || {})[caderno] || {};
+  const disciplinas = [...new Set(qc.map(q => q.disciplina).filter(Boolean))];
+  if (disciplinas.length === 0) return null;
+
+  // Calcular acertos/erros por disciplina na semana
+  const stats = {};
+  disciplinas.forEach(disc => {
+    const histSemana = qc.filter(q => q.disciplina === disc)
+      .flatMap(q => (q.historico || []).filter(h => diasSemana.includes(h.data)));
+    const acertos = histSemana.filter(h => h.acertou).length;
+    const total = histSemana.length;
+    const pct = total > 0 ? Math.round((acertos / total) * 100) : null;
+    const h = humor[disc] || 0;
+    stats[disc] = { acertos, total, pct, humor: h };
+  });
+
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, gridColumn: "span 2" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: C.accent }}>📊 Semana — Como estou por matéria</p>
+        <span style={{ fontSize: 11, color: C.textDim }}>Dom {diasSemana[0]?.slice(8)} → Sáb {diasSemana[6]?.slice(8)}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+        {disciplinas.slice(0, 8).map(disc => {
+          const s = stats[disc];
+          const hc = HUMOR_CONFIG.find(h => h.value === s.humor) || HUMOR_CONFIG[1];
+          const pb = (data.prioridadeBanca?.[caderno] || {})[disc] || "baixa";
+          return (
+            <div key={disc} style={{ background: s.humor ? hc.bg : C.surface2, border: `1px solid ${s.humor ? hc.cor + "40" : C.border}`, borderRadius: 10, padding: "12px 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: C.text, lineHeight: 1.3 }}>{disc}</p>
+                <Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill>
+              </div>
+              {s.total > 0 ? (
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3 }}>
+                    <span style={{ color: C.textDim }}>{s.acertos}/{s.total} acertos</span>
+                    <span style={{ color: s.pct >= 70 ? "#22c55e" : s.pct >= 50 ? "#eab308" : "#ef4444", fontWeight: 700 }}>{s.pct}%</span>
+                  </div>
+                  <div style={{ background: C.border, borderRadius: 3, height: 5 }}>
+                    <div style={{ background: s.pct >= 70 ? "#22c55e" : s.pct >= 50 ? "#eab308" : "#ef4444", height: "100%", width: `${s.pct}%`, borderRadius: 3, transition: "width .4s" }} />
+                  </div>
+                </div>
+              ) : (
+                <p style={{ fontSize: 11, color: C.textDim2, margin: "0 0 8px" }}>Sem revisões essa semana</p>
+              )}
+              <div style={{ fontSize: 11, color: s.humor ? hc.cor : C.textDim2, fontWeight: s.humor ? 700 : 400 }}>
+                {s.humor ? hc.label : "— sem anotação"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── SEMANA (aba completa) ────────────────────────────────────────────────────
+function Semana({ data, caderno, upd }) {
+  const diasSemana = getSemanaAtual();
+  const qc = (data.questoes || []).filter(q => q.caderno === caderno);
+  const disciplinas = [...new Set(qc.map(q => q.disciplina).filter(Boolean))];
+  const humor = (data.humorSemana || {})[caderno] || {};
+  const [selecionada, setSelecionada] = useState(null);
+
+  function setHumor(disc, valor) {
+    upd(d => {
+      const h = JSON.parse(JSON.stringify(d.humorSemana || {}));
+      if (!h[caderno]) h[caderno] = {};
+      h[caderno][disc] = valor;
+      return { ...d, humorSemana: h };
+    });
+  }
+
+  // Calcular stats detalhadas por disciplina
+  function getStats(disc) {
+    const questoesDisciplina = qc.filter(q => q.disciplina === disc);
+    const histSemana = questoesDisciplina.flatMap(q =>
+      (q.historico || []).filter(h => diasSemana.includes(h.data)).map(h => ({ ...h, tema: q.tema }))
+    );
+    const acertos = histSemana.filter(h => h.acertou).length;
+    const erros = histSemana.filter(h => !h.acertou).length;
+    const total = histSemana.length;
+    const pct = total > 0 ? Math.round((acertos / total) * 100) : null;
+
+    // Por dia
+    const porDia = diasSemana.map(d => {
+      const do_dia = histSemana.filter(h => h.data === d);
+      return { data: d, acertos: do_dia.filter(h => h.acertou).length, erros: do_dia.filter(h => !h.acertou).length };
+    });
+
+    // Por tema
+    const temas = [...new Set(questoesDisciplina.map(q => q.tema).filter(Boolean))];
+    const porTema = temas.map(tema => {
+      const h = histSemana.filter(h => h.tema === tema);
+      const a = h.filter(x => x.acertou).length;
+      return { tema, acertos: a, total: h.length, pct: h.length > 0 ? Math.round((a / h.length) * 100) : null };
+    });
+
+    return { acertos, erros, total, pct, porDia, porTema };
+  }
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      <div style={{ marginBottom: 20 }}>
+        <h3 style={{ margin: "0 0 4px", color: C.accent, fontSize: 15 }}>📊 Semana por Matéria</h3>
+        <p style={{ margin: 0, fontSize: 12, color: C.textDim }}>
+          Semana de Dom {new Date(diasSemana[0] + "T12:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} a Sáb {new Date(diasSemana[6] + "T12:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}
+        </p>
+      </div>
+
+      {disciplinas.length === 0 && (
+        <p style={{ color: C.textDim, textAlign: "center", padding: "40px 0" }}>Adicione questões para ver o progresso semanal.</p>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {disciplinas.map(disc => {
+          const s = getStats(disc);
+          const h = humor[disc] || 0;
+          const hc = HUMOR_CONFIG.find(x => x.value === h);
+          const pb = (data.prioridadeBanca?.[caderno] || {})[disc] || "baixa";
+          const aberta = selecionada === disc;
+
+          return (
+            <div key={disc} style={{ background: C.surface, border: `1px solid ${h ? hc.cor + "40" : C.border}`, borderRadius: 14, overflow: "hidden" }}>
+              {/* Header */}
+              <div style={{ padding: "14px 18px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", cursor: "pointer", background: h ? hc.bg + "80" : "transparent" }}
+                onClick={() => setSelecionada(aberta ? null : disc)}>
+                <span style={{ fontSize: 13, color: aberta ? C.accent : C.textDim2 }}>{aberta ? "▾" : "▸"}</span>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.text }}>{disc}</span>
+                <Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill>
+                {s.total > 0 && (
+                  <span style={{ fontSize: 12, fontWeight: 700, color: s.pct >= 70 ? "#22c55e" : s.pct >= 50 ? "#eab308" : "#ef4444" }}>
+                    {s.pct}% ({s.acertos}/{s.total})
+                  </span>
+                )}
+                {s.total === 0 && <span style={{ fontSize: 11, color: C.textDim2 }}>Sem revisões</span>}
+                {h ? <span style={{ fontSize: 12, color: hc.cor, fontWeight: 700 }}>{hc.label}</span> : <span style={{ fontSize: 11, color: C.textDim2 }}>Como estou?</span>}
+              </div>
+
+              {/* Conteúdo expandido */}
+              {aberta && (
+                <div style={{ padding: "0 18px 18px", borderTop: `1px solid ${C.border}` }}>
+
+                  {/* Como me sinto — termômetro */}
+                  <div style={{ margin: "16px 0" }}>
+                    <p style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: 0.5, marginBottom: 10 }}>COMO ESTOU NESSA MATÉRIA ESSA SEMANA?</p>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {HUMOR_CONFIG.map(hcfg => (
+                        <button key={hcfg.value} onClick={() => setHumor(disc, hcfg.value === h ? 0 : hcfg.value)}
+                          style={{ ...btn(h === hcfg.value ? hcfg.bg : C.surface2, h === hcfg.value ? hcfg.cor : C.border2, h === hcfg.value ? hcfg.cor : C.textDim), fontSize: 12, padding: "8px 14px", borderWidth: h === hcfg.value ? 2 : 1 }}>
+                          {hcfg.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Gráfico por dia */}
+                  {s.total > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <p style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: 0.5, marginBottom: 10 }}>ACERTOS POR DIA</p>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+                        {s.porDia.map((d, i) => {
+                          const tot = d.acertos + d.erros;
+                          const pct = tot > 0 ? Math.round((d.acertos / tot) * 100) : null;
+                          const cor = pct === null ? C.border : pct >= 70 ? "#22c55e" : pct >= 50 ? "#eab308" : "#ef4444";
+                          return (
+                            <div key={i} style={{ textAlign: "center" }}>
+                              <div style={{ fontSize: 9, color: C.textDim2, marginBottom: 4 }}>{DIAS_SEMANA[i]}</div>
+                              <div style={{ height: 40, background: C.border, borderRadius: 6, display: "flex", alignItems: "flex-end", overflow: "hidden" }}>
+                                {tot > 0 && <div style={{ width: "100%", height: `${pct}%`, background: cor, transition: "height .4s", minHeight: 4 }} />}
+                              </div>
+                              <div style={{ fontSize: 9, color: cor, marginTop: 3 }}>{pct !== null ? `${pct}%` : "–"}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Por tema */}
+                  {s.porTema.length > 0 && s.total > 0 && (
+                    <div>
+                      <p style={{ fontSize: 11, color: C.textDim, fontWeight: 700, letterSpacing: 0.5, marginBottom: 8 }}>POR TEMA</p>
+                      {s.porTema.map(t => (
+                        <div key={t.tema} style={{ marginBottom: 8 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
+                            <span style={{ color: C.textDim }}>{t.tema || "Sem tema"}</span>
+                            <span style={{ color: t.pct >= 70 ? "#22c55e" : t.pct >= 50 ? "#eab308" : "#ef4444", fontWeight: 700 }}>
+                              {t.pct !== null ? `${t.pct}% (${t.acertos}/${t.total})` : "–"}
+                            </span>
+                          </div>
+                          {t.total > 0 && (
+                            <div style={{ background: C.border, borderRadius: 3, height: 5 }}>
+                              <div style={{ background: t.pct >= 70 ? "#22c55e" : t.pct >= 50 ? "#eab308" : "#ef4444", height: "100%", width: `${t.pct}%`, borderRadius: 3, transition: "width .4s" }} />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {s.total === 0 && (
+                    <p style={{ fontSize: 12, color: C.textDim2, padding: "10px 0" }}>Nenhuma revisão dessa disciplina essa semana.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── REVISÃO ──────────────────────────────────────────────────────────────────
+function Revisao({data,caderno,upd,onQuestaoFeita}) {
+  const [idx,setIdx]=useState(0);
+  const [mostrarGabarito,setMostrarGabarito]=useState(false);
+  const [iaTexto,setIaTexto]=useState("");
+  const [iaLoading,setIaLoading]=useState(false);
+  const [iaExpandido,setIaExpandido]=useState(true);
+  const [copiado,setCopiado]=useState(false);
+  const [novaDestino,setNovaDestino]=useState(null);
+  const [filtroDisc,setFiltroDisc]=useState("Todas");
+  const [filtroTema,setFiltroTema]=useState("Todos");
+  const sessaoRef=useRef(Date.now());
+
+  const todasPendentes=[...pendentesHoje(data.questoes||[],caderno)].sort((a,b)=>scoreUrgencia(b,data.prioridadeBanca,caderno)-scoreUrgencia(a,data.prioridadeBanca,caderno));
+  const pendentes=todasPendentes.filter(q=>(filtroDisc==="Todas"||q.disciplina===filtroDisc)&&(filtroTema==="Todos"||q.tema===filtroTema));
+  const disciplinasDisp=["Todas",...new Set(todasPendentes.map(q=>q.disciplina).filter(Boolean))];
+  const temasDisp=["Todos",...new Set(todasPendentes.filter(q=>filtroDisc==="Todas"||q.disciplina===filtroDisc).map(q=>q.tema).filter(Boolean))];
+  const q=pendentes[idx];
+
+  useEffect(()=>{setIdx(0);setMostrarGabarito(false);setIaTexto("");setNovaDestino(null);setFiltroDisc("Todas");setFiltroTema("Todos");},[caderno]);
+
+  function registrarSessao() {
+    const dur=Math.max(1,Math.round((Date.now()-sessaoRef.current)/60000));
+    sessaoRef.current=Date.now();
+    const agora=new Date();
+    upd(d=>({...d,sessoes:[...(d.sessoes||[]),{data:hoje(),hora:agora.getHours(),duracao_min:dur,caderno}]}));
+  }
+
+  function responder(acertou) {
+    if(!q) return;
+    registrarSessao();
+    let det=null;
+    upd(d=>({...d,questoes:d.questoes.map(qst=>{
+      if(qst.id!==q.id) return qst;
+      const novoNivel=acertou?Math.min(qst.nivel+1,3):0;
+      const novosAcertos=acertou?(qst.acertosConsecutivos||0)+1:0;
+      const prox=new Date(); prox.setDate(prox.getDate()+NIVEL_DIAS[NIVEIS[novoNivel]]);
+      const qa={...qst,nivel:novoNivel,acertosConsecutivos:novosAcertos,proximaRevisao:prox.toISOString().split("T")[0],historico:[...(qst.historico||[]),{data:hoje(),acertou,nivel:novoNivel}]};
+      const dest=calcularDestino(qa);
+      if(dest&&dest!==qst.destino) det=dest;
+      return {...qa,destino:dest};
+    })}));
+    onQuestaoFeita();
+    if(det) setNovaDestino(det);
+    else{setIdx(i=>i+1);setMostrarGabarito(false);setIaTexto("");}
+  }
+
+  async function pedirIA() {
+    if(!q) return;
+    setIaLoading(true); setIaTexto("");
+    try {
+      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:4000,messages:[{role:"user",content:`Sou concurseira do TCE-RJ (Auditor de Controle Externo).\n\nDisciplina: ${q.disciplina||""}\nTema: ${q.tema||""}\nTópico: ${q.topico||""}\nTipo de erro: ${q.tipoErro==="detalhe"?"Erro de detalhe":"Erro de compreensão"}\nEnunciado: ${q.enunciado}\nGabarito correto: ${q.gabarito}\nMinha resposta: ${q.suaResposta||"não informada"}\nMinha anotação: ${q.anotacao||"nenhuma"}\n\n1. **Por que o gabarito está correto** — didático e focado no que cai em prova\n2. **Qual raciocínio me levou ao erro** — seja específica\n3. **Macete de memorização** — algo inesquecível\n4. **Base legal ou normativa** — artigo, súmula ou norma relevante\n${q.tipoErro==="compreensao"?"5. **Contexto do tema** — o que mais devo estudar nesse assunto":""}\n\nSeja direta e focada no TCE-RJ.`}]})});
+      const j=await r.json();
+      setIaTexto(j.content?.[0]?.text||"Sem resposta.");
+    } catch{setIaTexto("Erro ao conectar. Tente novamente.");}
+    setIaLoading(false);
+  }
+
+  if(pendentes.length===0) return <div style={{textAlign:"center",padding:"60px 20px"}}><div style={{fontSize:52,marginBottom:12}}>✨</div><p style={{fontSize:18,color:"#22c55e",fontWeight:700}}>Nenhuma questão para revisar hoje!</p><p style={{fontSize:13,color:C.textDim}}>Todas em dia! 🎉</p></div>;
+  if(idx>=pendentes.length) return <div style={{textAlign:"center",padding:"60px 20px"}}><div style={{fontSize:52,marginBottom:12}}>🎉</div><p style={{fontSize:18,color:"#22c55e",fontWeight:700}}>Revisão concluída!</p><p style={{fontSize:13,color:C.textDim}}>Você revisou {pendentes.length} questão(ões).</p><button onClick={()=>{setIdx(0);setMostrarGabarito(false);setIaTexto("");setNovaDestino(null);}} style={{marginTop:16,...btn(C.surface2,C.border2,C.accent)}}>Revisar novamente</button></div>;
+
+  if(novaDestino){const dc=DESTINO_CONFIG[novaDestino];return(
+    <div style={{maxWidth:560,margin:"0 auto",textAlign:"center"}}>
+      <div style={{background:dc.bg,border:`2px solid ${dc.cor}`,borderRadius:16,padding:32}}>
+        <div style={{fontSize:52,marginBottom:12}}>{novaDestino==="anki"?"🟢":novaDestino==="notebooklm"?"🔵":"✅"}</div>
+        <p style={{fontSize:20,fontWeight:700,color:dc.cor,margin:"0 0 8px"}}>{novaDestino==="anki"?"Pronta para o Anki!":novaDestino==="notebooklm"?"Pronta para o NotebookLM!":"Questão dominada!"}</p>
+        <p style={{fontSize:13,color:C.textDim,margin:"0 0 20px"}}>{novaDestino==="anki"?"Erro de Detalhe com 2 acertos seguidos. Exporta direto pro Anki.":novaDestino==="notebooklm"?"Erro de Compreensão com 2 acertos. Revise no NotebookLM antes do Anki.":"Nível Iluminar atingido! Questão arquivada."}</p>
+        <button onClick={()=>{setNovaDestino(null);setIdx(i=>i+1);setMostrarGabarito(false);setIaTexto("");}} style={{...btn(dc.bg,dc.cor,dc.cor),padding:"12px 24px"}}>Continuar revisão →</button>
+      </div>
+    </div>
+  );}
+
+  const pb=(data.prioridadeBanca?.[caderno]||{})[q?.disciplina]||"baixa";
+
+  return (
+    <div style={{maxWidth:680,margin:"0 auto"}}>
+      {/* FILTROS */}
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        <select value={filtroDisc} onChange={e=>{setFiltroDisc(e.target.value);setFiltroTema("Todos");setIdx(0);setMostrarGabarito(false);setIaTexto("");}}
+          style={{...inp,width:"auto",flex:1,minWidth:140,fontSize:12}}>
+          {disciplinasDisp.map(d=><option key={d}>{d}</option>)}
+        </select>
+        <select value={filtroTema} onChange={e=>{setFiltroTema(e.target.value);setIdx(0);setMostrarGabarito(false);setIaTexto("");}}
+          style={{...inp,width:"auto",flex:1,minWidth:140,fontSize:12}}>
+          {temasDisp.map(t=><option key={t}>{t}</option>)}
+        </select>
+        {(filtroDisc!=="Todas"||filtroTema!=="Todos")&&
+          <button onClick={()=>{setFiltroDisc("Todas");setFiltroTema("Todos");setIdx(0);}} style={{...btn(C.surface2,C.border2,C.textDim),fontSize:12,padding:"8px 12px"}}>✕ Limpar</button>}
+        <span style={{fontSize:11,color:C.textDim,alignSelf:"center",whiteSpace:"nowrap"}}>{pendentes.length} pendente(s)</span>
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.textDim,marginBottom:6}}>
+          <span>{idx+1} / {pendentes.length}</span>
+          <div style={{display:"flex",gap:6}}><Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill><Pill cor={NIVEL_CORES[NIVEIS[q?.nivel||0]]}>{NIVEIS[q?.nivel||0]}</Pill></div>
+        </div>
+        <div style={{background:C.border,borderRadius:4,height:4}}><div style={{background:`linear-gradient(90deg,${C.accentDark},${C.accent})`,height:"100%",width:`${(idx/pendentes.length)*100}%`,borderRadius:4,transition:"width .3s"}}/></div>
+      </div>
+
+      {q?.tipoErro&&<div style={{background:TIPO_ERRO_CONFIG[q.tipoErro].cor+"12",border:`1px solid ${TIPO_ERRO_CONFIG[q.tipoErro].cor}30`,borderRadius:10,padding:"8px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+        <span>{TIPO_ERRO_CONFIG[q.tipoErro].icon}</span><span style={{fontSize:12,color:TIPO_ERRO_CONFIG[q.tipoErro].cor,fontWeight:700}}>{TIPO_ERRO_CONFIG[q.tipoErro].label}</span>
+        {q.acertosConsecutivos>0&&<span style={{marginLeft:"auto",fontSize:11,color:TIPO_ERRO_CONFIG[q.tipoErro].cor}}>🔥 {q.acertosConsecutivos}/3 acertos seguidos</span>}
+      </div>}
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderLeft:`3px solid ${NIVEL_CORES[NIVEIS[q?.nivel||0]]}`,borderRadius:14,padding:22,marginBottom:14}}>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+          {q?.disciplina&&<Tag bg="#3b1f6e22" color="#c8b8e8" border="#3b1f6e44">{q.disciplina}</Tag>}
+          {q?.tema&&<Tag bg="#1e3a5f22" color="#93c5fd" border="#1e3a5f44">{q.tema}</Tag>}
+          {q?.topico&&<Tag bg="#1a302022" color="#86efac" border="#1a302044">{q.topico}</Tag>}
+        </div>
+        <p style={{fontSize:15,lineHeight:1.8,color:C.text,margin:"0 0 14px"}}>{q?.enunciado}</p>
+        {q?.alternativas?.length>0&&<div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>{q.alternativas.map((alt,i)=><div key={i} onClick={()=>setMostrarGabarito(true)} style={{fontSize:13,color:C.textDim,padding:"10px 14px",background:C.surface2,borderRadius:7,border:`1px solid ${C.border}`,cursor:"pointer",transition:"all .15s"}} onMouseOver={e=>{e.currentTarget.style.background="#1e1e38";e.currentTarget.style.color=C.text;e.currentTarget.style.borderColor=C.accent;}} onMouseOut={e=>{e.currentTarget.style.background=C.surface2;e.currentTarget.style.color=C.textDim;e.currentTarget.style.borderColor=C.border;}}>{alt}</div>)}</div>}
+        {q?.alternativas?.length>0&&!mostrarGabarito&&<p style={{fontSize:11,color:C.textDim2,textAlign:"center",margin:"-4px 0 10px"}}>👆 Clique na alternativa para revelar o gabarito</p>}
+        {q?.imagem&&<img src={q.imagem} alt="" style={{maxWidth:"100%",borderRadius:8,marginTop:8}}/>}
+        {q?.anotacao&&<p style={{fontSize:12,color:"#6668aa",marginTop:10,padding:"8px 12px",background:"#111128",borderRadius:8,fontStyle:"italic"}}>📎 {q.anotacao}</p>}
+      </div>
+
+      {!mostrarGabarito?<button onClick={()=>setMostrarGabarito(true)} style={{width:"100%",...btn(C.surface2,C.border2,C.accent),padding:"14px",fontSize:14}}>👁 Revelar Gabarito</button>:(
+        <div>
+          <div style={{background:"#071a10",border:"1px solid #0d3020",borderRadius:10,padding:16,marginBottom:12}}>
+            <p style={{margin:"0 0 6px",fontSize:11,color:"#4ade80",fontWeight:700}}>✅ GABARITO</p>
+            <div style={{margin:0,fontSize:14,color:"#d4f0c8",lineHeight:1.85}} dangerouslySetInnerHTML={{__html: q?.gabarito?.replace(/\n/g,"<br/>") || ""}} />
+          </div>
+          {q?.suaResposta&&<div style={{background:"#1a0808",border:"1px solid #2e1010",borderRadius:10,padding:12,marginBottom:12}}><p style={{margin:"0 0 4px",fontSize:11,color:"#f87171",fontWeight:700}}>❌ SUA RESPOSTA</p><p style={{margin:0,fontSize:13,color:"#f0c8c8"}}>{q.suaResposta}</p></div>}
+          <div style={{display:"flex",gap:10,marginBottom:12}}>
+            <button onClick={()=>responder(true)} style={{flex:1,...btn("#0c2e18","#1a5030","#4ade80"),padding:"13px",fontSize:15}}>✓ Acertei</button>
+            <button onClick={()=>responder(false)} style={{flex:1,...btn("#2e0c0c","#501a1a","#f87171"),padding:"13px",fontSize:15}}>✗ Errei</button>
+          </div>
+          <button onClick={pedirIA} disabled={iaLoading} style={{width:"100%",...btn("#130d24","#2e1e5c",iaLoading?C.textDim:C.accent),padding:"11px"}}>
+            {iaLoading?"🤖 Analisando...":"🤖 Pedir explicação completa à IA"}
+          </button>
+          {iaTexto&&(
+            <div style={{marginTop:14,background:"#0c0c1e",border:"1px solid #2a1e50",borderRadius:12,overflow:"hidden"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #1e1a38",display:"flex",alignItems:"center",gap:10,justifyContent:"space-between",background:"#0f0f20"}}>
+                <span style={{fontSize:11,color:C.accent,fontWeight:700}}>🤖 EXPLICAÇÃO COMPLETA DA IA</span>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{const txt=`# ${q?.disciplina||""} · ${q?.tema||""}\n\n## Questão\n${q?.enunciado||""}\n\n## Gabarito\n${q?.gabarito||""}\n\n## Meu Erro\n${q?.suaResposta||"-"}\n\n## Explicação da IA\n${iaTexto}\n\n---`;navigator.clipboard.writeText(txt).then(()=>{setCopiado(true);setTimeout(()=>setCopiado(false),2500);});}} style={{...btn("#071828","#1a4060",copiado?"#4ade80":"#60a5fa"),fontSize:11,padding:"5px 12px"}}>
+                    {copiado?"✅ Copiado!":"🔵 Copiar pro NotebookLM"}
+                  </button>
+                  <button onClick={()=>setIaExpandido(!iaExpandido)} style={{...btn(C.surface2,C.border2,C.textDim),fontSize:11,padding:"5px 10px"}}>
+                    {iaExpandido?"▲ Recolher":"▼ Expandir"}
+                  </button>
+                </div>
+              </div>
+              {iaExpandido&&<div style={{padding:"18px 20px",maxHeight:"60vh",overflowY:"auto"}}>
+                <div style={{fontSize:14,lineHeight:1.9,color:"#c8c4dc"}}>
+                  {iaTexto.split('\n').map((linha,i)=>{
+                    if(!linha.trim()) return <div key={i} style={{height:8}}/>;
+                    if(linha.match(/^\d+\.\s*\*\*(.*?)\*\*/)){const num=linha.match(/^(\d+)\./)[1];const titulo=linha.replace(/^\d+\.\s*\*\*(.*?)\*\*/,"$1");const resto=linha.replace(/^\d+\.\s*\*\*.*?\*\*/,"").trim();return(<div key={i} style={{margin:"20px 0 8px",padding:"10px 14px",background:"#15103a",borderRadius:8,borderLeft:"3px solid #a78bfa"}}><span style={{fontSize:11,color:C.accentDark,fontWeight:700,marginRight:8}}>{num}</span><span style={{color:"#e8d8ff",fontWeight:700,fontSize:14}}>{titulo}</span>{resto&&<p style={{margin:"6px 0 0",color:"#c8c4dc",fontWeight:400,fontSize:13}}>{resto.replace(/\*\*(.*?)\*\*/g,"$1")}</p>}</div>);}
+                    if(linha.match(/^\*\*(.*?)\*\*$/)) return <p key={i} style={{color:"#e8d8ff",fontWeight:700,fontSize:14,margin:"18px 0 6px",borderBottom:"1px solid #2a1e50",paddingBottom:6}}>{linha.replace(/\*\*/g,"")}</p>;
+                    const partes=linha.split(/\*\*(.*?)\*\*/g).map((p,j)=>j%2===1?<strong key={j} style={{color:"#e8d8ff"}}>{p}</strong>:p);
+                    if(linha.match(/^[-•*]\s/)) return <p key={i} style={{margin:"5px 0",paddingLeft:16,color:"#c8c4dc",display:"flex",gap:8}}><span style={{color:C.accent,flexShrink:0}}>▸</span><span>{partes}</span></p>;
+                    return <p key={i} style={{margin:"5px 0",color:"#c8c4dc"}}>{partes}</p>;
+                  })}
+                </div>
+              </div>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── RICH EDITOR ─────────────────────────────────────────────────────────────
+function RichEditor({ value, onChange, placeholder }) {
+  const editorRef = useRef(null);
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    if (editorRef.current && !initialized) {
+      editorRef.current.innerHTML = value || "";
+      setInitialized(true);
+    }
+  }, []);
+
+  function exec(cmd, val = null) {
+    editorRef.current.focus();
+    document.execCommand(cmd, false, val);
+    onChange(editorRef.current.innerHTML);
+  }
+
+  const toolBtnStyle = (active) => ({
+    background: active ? "#2a1060" : C.surface2,
+    border: `1px solid ${active ? C.accent : C.border2}`,
+    color: active ? C.accent : C.textDim,
+    padding: "5px 10px", borderRadius: 6, cursor: "pointer",
+    fontSize: 13, fontFamily: "inherit", fontWeight: 700,
+    minWidth: 32, textAlign: "center"
+  });
+
+  return (
+    <div style={{ border: `1px solid ${C.border2}`, borderRadius: 10, overflow: "hidden", background: C.surface }}>
+      {/* Toolbar */}
+      <div style={{ display: "flex", gap: 4, padding: "8px 10px", background: "#0f0f1e", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+        <button onMouseDown={e=>{e.preventDefault();exec("bold")}} style={toolBtnStyle(false)} title="Negrito"><b>N</b></button>
+        <button onMouseDown={e=>{e.preventDefault();exec("italic")}} style={toolBtnStyle(false)} title="Itálico"><i>I</i></button>
+        <button onMouseDown={e=>{e.preventDefault();exec("underline")}} style={toolBtnStyle(false)} title="Sublinhado"><u>S</u></button>
+        <div style={{ width: 1, background: C.border, margin: "0 4px" }} />
+        <button onMouseDown={e=>{e.preventDefault();exec("foreColor","#4ade80")}} style={{...toolBtnStyle(false), color:"#4ade80"}} title="Verde">●</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("foreColor","#f87171")}} style={{...toolBtnStyle(false), color:"#f87171"}} title="Vermelho">●</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("foreColor","#60a5fa")}} style={{...toolBtnStyle(false), color:"#60a5fa"}} title="Azul">●</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("foreColor","#f97316")}} style={{...toolBtnStyle(false), color:"#f97316"}} title="Laranja">●</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("foreColor","#e8d8ff")}} style={{...toolBtnStyle(false), color:"#e8d8ff"}} title="Lilás">●</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("foreColor","#fbbf24")}} style={{...toolBtnStyle(false), color:"#fbbf24"}} title="Amarelo">●</button>
+        <div style={{ width: 1, background: C.border, margin: "0 4px" }} />
+        <button onMouseDown={e=>{e.preventDefault();exec("insertUnorderedList")}} style={toolBtnStyle(false)} title="Lista">≡</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("formatBlock","h3")}} style={{...toolBtnStyle(false), fontSize:11}} title="Título">T</button>
+        <button onMouseDown={e=>{e.preventDefault();exec("formatBlock","p")}} style={{...toolBtnStyle(false), fontSize:11}} title="Normal">¶</button>
+        <div style={{ width: 1, background: C.border, margin: "0 4px" }} />
+        <button onMouseDown={e=>{e.preventDefault();exec("removeFormat")}} style={{...toolBtnStyle(false), fontSize:11}} title="Limpar formatação">✕</button>
+      </div>
+      {/* Editor area */}
+      <div
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        onInput={() => onChange(editorRef.current.innerHTML)}
+        data-placeholder={placeholder}
+        style={{
+          minHeight: 120, padding: "12px 14px", fontSize: 14,
+          color: C.text, lineHeight: 1.8, outline: "none",
+          background: C.surface,
+        }}
+      />
+      <style>{`
+        [contenteditable]:empty:before {
+          content: attr(data-placeholder);
+          color: #444458;
+          pointer-events: none;
+        }
+        [contenteditable] h3 { color: #e8d8ff; margin: 8px 0 4px; font-size: 14px; }
+        [contenteditable] ul { padding-left: 20px; }
+        [contenteditable] li { margin: 3px 0; }
+      `}</style>
+    </div>
+  );
+}
+
+// ─── ADICIONAR ────────────────────────────────────────────────────────────────
+function Adicionar({data,caderno,upd,onAdded}) {
+  const [form,setForm]=useState({tipo:"multipla",disciplina:"",tema:"",topico:"",enunciado:"",alternativas:["","","",""],gabarito:"",suaResposta:"",anotacao:"",imagem:null,tipoErro:"",fonte:""});
+  const fileRef=useRef();
+  const F=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const setAlt=(i,v)=>setForm(f=>{const a=[...f.alternativas];a[i]=v;return{...f,alternativas:a};});
+  function handleImg(e){const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>F("imagem",ev.target.result);r.readAsDataURL(file);}
+  function handleDrop(e){e.preventDefault();const file=e.dataTransfer.files[0];if(!file||!file.type.startsWith("image/"))return;const r=new FileReader();r.onload=ev=>F("imagem",ev.target.result);r.readAsDataURL(file);}
+  function salvar(){
+    if(!form.enunciado.trim()||!form.gabarito.trim()){alert("Preencha o enunciado e o gabarito!");return;}
+    if(!form.tipoErro){alert("Classifique o tipo de erro!");return;}
+    const alts=form.tipo==="multipla"?form.alternativas.filter(a=>a.trim()):form.tipo==="vf"?["Verdadeiro","Falso"]:[];
+    upd(d=>({...d,questoes:[...d.questoes,{id:Date.now(),caderno,...form,alternativas:alts,nivel:0,proximaRevisao:hoje(),historico:[],criadoEm:hoje(),acertosConsecutivos:0,destino:null}]}));
+    setForm({tipo:"multipla",disciplina:"",tema:"",topico:"",enunciado:"",alternativas:["","","",""],gabarito:"",suaResposta:"",anotacao:"",imagem:null,tipoErro:"",fonte:""});
+    onAdded();
+  }
+  const discExist=[...new Set((data.questoes||[]).filter(q=>q.caderno===caderno).map(q=>q.disciplina).filter(Boolean))];
+  const pb=(data.prioridadeBanca?.[caderno]||{})[form.disciplina];
+
+  return (
+    <div style={{maxWidth:620}}>
+      <h3 style={{margin:"0 0 20px",color:C.accent,fontSize:15,fontWeight:700}}>➕ Nova Questão — {caderno}</h3>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:20}}>
+        <p style={{margin:"0 0 6px",fontSize:13,fontWeight:700,color:"#f0e6d3"}}>① Tipo de erro</p>
+        <p style={{margin:"0 0 14px",fontSize:11,color:C.textDim}}>Define automaticamente o destino: Anki direto ou NotebookLM primeiro.</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {Object.entries(TIPO_ERRO_CONFIG).map(([key,cfg])=>(
+            <button key={key} onClick={()=>F("tipoErro",key)} style={{...btn(form.tipoErro===key?cfg.cor+"22":C.surface2,form.tipoErro===key?cfg.cor:C.border2,form.tipoErro===key?cfg.cor:C.textDim),padding:"14px",textAlign:"left",borderWidth:form.tipoErro===key?2:1}}>
+              <div style={{fontSize:20,marginBottom:6}}>{cfg.icon}</div>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{cfg.label}</div>
+              <div style={{fontSize:11,lineHeight:1.5,fontWeight:400,color:C.textDim}}>{cfg.desc}</div>
+              {form.tipoErro===key&&<div style={{fontSize:11,marginTop:8,color:cfg.cor,fontWeight:700}}>→ {key==="detalhe"?"Anki após 2 acertos":"NotebookLM após 2 acertos → depois Anki"}</div>}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{marginBottom:14}}><Label>② TIPO</Label><div style={{display:"flex",gap:8}}>{[["multipla","Múltipla"],["vf","V/F"],["discursiva","Discursiva"]].map(([v,l])=><button key={v} onClick={()=>F("tipo",v)} style={{flex:1,...btn(form.tipo===v?"#2a1060":C.surface2,form.tipo===v?"#6a3adf":C.border2,form.tipo===v?C.accent:C.textDim),fontSize:12,padding:"8px"}}>{l}</button>)}</div></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div><Label>③ DISCIPLINA {pb&&<span style={{color:PRIORIDADE_COR[pb],fontWeight:700}}>({PRIORIDADE_LABEL[pb]})</span>}</Label><input value={form.disciplina} onChange={e=>F("disciplina",e.target.value)} list="dl" placeholder="Ex: Dir. Administrativo" style={inp}/><datalist id="dl">{discExist.map(d=><option key={d} value={d}/>)}</datalist></div>
+        <div><Label>TEMA</Label><input value={form.tema} onChange={e=>F("tema",e.target.value)} placeholder="Ex: Atos Administrativos" style={inp}/></div>
+      </div>
+      <div style={{marginBottom:10}}><Label>TÓPICO</Label><input value={form.topico} onChange={e=>F("topico",e.target.value)} placeholder="Ex: Vinculação e Discricionariedade" style={inp}/></div>
+      <div style={{marginBottom:10}}><Label color="#f87171">④ ENUNCIADO *</Label><textarea value={form.enunciado} onChange={e=>F("enunciado",e.target.value)} placeholder="Cole o enunciado completo do TEC aqui..." rows={5} style={{...inp,resize:"vertical",lineHeight:1.7}}/></div>
+      {form.tipo==="multipla"&&<div style={{marginBottom:10}}><Label>ALTERNATIVAS</Label>{form.alternativas.map((alt,i)=><input key={i} value={alt} onChange={e=>setAlt(i,e.target.value)} placeholder={`Alternativa ${String.fromCharCode(65+i)}`} style={{...inp,marginBottom:6}}/>)}</div>}
+      <div style={{marginBottom:10}}>
+        <Label color="#4ade80">⑤ GABARITO *</Label>
+        <RichEditor value={form.gabarito} onChange={v=>F("gabarito",v)} placeholder="Resposta correta + justificativa completa..." />
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div><Label color="#f97316">SUA RESPOSTA</Label><input value={form.suaResposta} onChange={e=>F("suaResposta",e.target.value)} placeholder="O que você marcou..." style={inp}/></div>
+        <div><Label>MACETE</Label><input value={form.anotacao} onChange={e=>F("anotacao",e.target.value)} placeholder="Dica para memorizar..." style={inp}/></div>
+      </div>
+      <div style={{marginBottom:10}}><Label>FONTE / BANCA</Label><input value={form.fonte||""} onChange={e=>F("fonte",e.target.value)} placeholder="Ex: CESPE 2023, FGV 2022, Simulado..." style={inp}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10
+      </div>
+      <div style={{marginBottom:20}}><Label>IMAGEM</Label><div onDrop={handleDrop} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.border2}`,borderRadius:10,padding:"16px",textAlign:"center",cursor:"pointer",background:C.surface2}}>{form.imagem?<div><img src={form.imagem} alt="preview" style={{maxHeight:100,borderRadius:8}}/><button onClick={e=>{e.stopPropagation();F("imagem",null);}} style={{display:"block",margin:"6px auto 0",...btn("#2e0c0c","#501a1a","#f87171"),fontSize:11}}>Remover</button></div>:<p style={{fontSize:12,color:C.textDim,margin:0}}>🖼 Arraste ou clique</p>}</div><input ref={fileRef} type="file" accept="image/*" onChange={handleImg} style={{display:"none"}}/></div>
+      <button onClick={salvar} style={{width:"100%",background:"linear-gradient(135deg,#2a1060,#1a2a60)",border:"1px solid #4a2a9e",color:"#d8c8ff",padding:"14px",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>➕ Salvar no Caderno "{caderno}"</button>
+    </div>
+  );
+}
+
+// ─── EXPORTAR ─────────────────────────────────────────────────────────────────
+function Exportar({data,caderno,upd}) {
+  const [copiado,setCopiado]=useState(null);
+  const [filtro,setFiltro]=useState("todos");
+  const prontas=(data.questoes||[]).filter(q=>q.caderno===caderno&&q.destino&&q.destino!=="arquivada");
+  const filtradas=filtro==="todos"?prontas:prontas.filter(q=>q.destino===filtro);
+  const qtdAnki=prontas.filter(q=>q.destino==="anki").length;
+  const qtdNLM=prontas.filter(q=>q.destino==="notebooklm").length;
+
+  function copy(txt,key){navigator.clipboard.writeText(txt).then(()=>{setCopiado(key);setTimeout(()=>setCopiado(null),2500);});}
+  function copiarAnki(q){copy(`FRENTE:\n${q.enunciado}\n\n${q.alternativas?.length>0?q.alternativas.join("\n")+"\n\n":""}VERSO:\n${q.gabarito}${q.anotacao?"\n\nMACETE: "+q.anotacao:""}`,q.id+"_a");}
+  function copiarNLM(q){copy(`# ${q.disciplina||""} — ${q.tema||""}\n\n## Questão\n${q.enunciado}\n\n${q.alternativas?.length>0?"## Alternativas\n"+q.alternativas.join("\n")+"\n\n":""}## Gabarito\n${q.gabarito}\n\n## Meu Erro\n${q.suaResposta||"-"}\n\n## Macete\n${q.anotacao||"-"}\n\n---`,q.id+"_n");}
+  function copiarTodosAnki(){copy(prontas.filter(q=>q.destino==="anki").map(q=>`FRENTE:\n${q.enunciado}\n\nVERSO:\n${q.gabarito}${q.anotacao?"\nMACETE: "+q.anotacao:""}`).join("\n\n====================\n\n"),"all_a");}
+  function copiarTodosNLM(){copy(prontas.filter(q=>q.destino==="notebooklm").map(q=>`# ${q.disciplina||""} — ${q.tema||""}\n\n## Questão\n${q.enunciado}\n\n## Gabarito\n${q.gabarito}\n\n## Meu Erro\n${q.suaResposta||"-"}\n\n## Macete\n${q.anotacao||"-"}\n\n---`).join("\n\n"),"all_n");}
+  function marcarExp(id){upd(d=>({...d,questoes:d.questoes.map(q=>q.id===id?{...q,destino:"arquivada",acertosConsecutivos:0}:q)}));}
+
+  return (
+    <div style={{maxWidth:780}}>
+      <h3 style={{margin:"0 0 6px",color:C.accent,fontSize:15}}>📤 Exportar</h3>
+      <p style={{margin:"0 0 20px",fontSize:12,color:C.textDim}}>Questões maduras para sair do caderno.</p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+        <div style={{background:"#071a10",border:"2px solid #0d3020",borderRadius:14,padding:18}}>
+          <div style={{fontSize:28,fontWeight:700,color:"#22c55e",marginBottom:4}}>{qtdAnki}</div>
+          <div style={{fontSize:13,color:"#4ade80",fontWeight:700,marginBottom:8}}>🟢 Prontas pro Anki</div>
+          {qtdAnki>0&&<button onClick={copiarTodosAnki} style={{...btn("#0c2e18","#1a5030","#4ade80"),fontSize:12,width:"100%"}}>{copiado==="all_a"?"✅ Copiado!":` Copiar ${qtdAnki} card(s)`}</button>}
+        </div>
+        <div style={{background:"#071828",border:"2px solid #0d2040",borderRadius:14,padding:18}}>
+          <div style={{fontSize:28,fontWeight:700,color:"#60a5fa",marginBottom:4}}>{qtdNLM}</div>
+          <div style={{fontSize:13,color:"#93c5fd",fontWeight:700,marginBottom:8}}>🔵 Prontas pro NotebookLM</div>
+          {qtdNLM>0&&<button onClick={copiarTodosNLM} style={{...btn("#071828","#1a4060","#60a5fa"),fontSize:12,width:"100%"}}>{copiado==="all_n"?"✅ Copiado!":` Copiar ${qtdNLM} doc(s)`}</button>}
+        </div>
+      </div>
+      {prontas.length===0?<div style={{textAlign:"center",padding:"50px 20px",color:C.textDim}}><p style={{fontSize:32,marginBottom:12}}>🎯</p><p style={{fontSize:14}}>Nenhuma questão pronta ainda.</p><p style={{fontSize:12,color:C.textDim2}}>Acerte 2x seguidas na revisão para elas aparecerem aqui.</p></div>:filtradas.map(q=>{const dc=DESTINO_CONFIG[q.destino];const pb=(data.prioridadeBanca?.[caderno]||{})[q.disciplina]||"baixa";return(
+        <div key={q.id} style={{background:dc.bg,border:`1px solid ${dc.border}`,borderRadius:12,padding:18,marginBottom:12}}>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}><Pill cor={dc.cor}>{dc.icon} {dc.label}</Pill><Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill>{q.tipoErro&&<Pill cor={TIPO_ERRO_CONFIG[q.tipoErro]?.cor}>{TIPO_ERRO_CONFIG[q.tipoErro]?.icon} {TIPO_ERRO_CONFIG[q.tipoErro]?.label}</Pill>}</div>
+          <p style={{margin:"0 0 4px",fontSize:11,color:C.textDim}}>{q.disciplina} · {q.tema}</p>
+          <p style={{margin:"0 0 12px",fontSize:13,color:C.text,lineHeight:1.6}}>{q.enunciado.slice(0,120)}{q.enunciado.length>120?"...":""}</p>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {q.destino==="anki"&&<button onClick={()=>copiarAnki(q)} style={{...btn(dc.bg,dc.cor,dc.cor),fontSize:12}}>{copiado===q.id+"_a"?"✅ Copiado!":"📋 Copiar card Anki"}</button>}
+            {q.destino==="notebooklm"&&<button onClick={()=>copiarNLM(q)} style={{...btn(dc.bg,dc.border,dc.cor),fontSize:12}}>{copiado===q.id+"_n"?"✅ Copiado!":"📋 Copiar doc NotebookLM"}</button>}
+            <button onClick={()=>marcarExp(q.id)} style={{...btn(C.surface2,C.border2,C.textDim),fontSize:12}}>✅ Marcar exportada</button>
+          </div>
+        </div>
+      );})}
+    </div>
+  );
+}
+
+// ─── BANCA ────────────────────────────────────────────────────────────────────
+function BancaConfig({data,caderno,upd}) {
+  const [nova,setNova]=useState("");
+  const pb=(data.prioridadeBanca||{})[caderno]||{};
+  const discExist=[...new Set((data.questoes||[]).filter(q=>q.caderno===caderno).map(q=>q.disciplina).filter(Boolean))];
+  const todas=[...new Set([...Object.keys(pb),...discExist])].filter(Boolean);
+  function set(disc,val){upd(d=>{const n=JSON.parse(JSON.stringify(d.prioridadeBanca||{}));if(!n[caderno])n[caderno]={};n[caderno][disc]=val;return{...d,prioridadeBanca:n};});}
+  function add(){if(!nova.trim())return;set(nova.trim(),"media");setNova("");}
+  return (
+    <div style={{maxWidth:700}}>
+      <h3 style={{margin:"0 0 6px",color:C.accent,fontSize:15}}>🎯 Prioridade da Banca — {caderno}</h3>
+      <p style={{margin:"0 0 20px",fontSize:12,color:C.textDim,lineHeight:1.6}}>Define a ordem de revisão. Alta+Acender = revisado primeiro.</p>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+        {todas.map(disc=>{const p=pb[disc]||"media";const cnt=(data.questoes||[]).filter(q=>q.caderno===caderno&&q.disciplina===disc).length;return(
+          <div key={disc} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <div style={{flex:1,minWidth:150}}><span style={{fontSize:13,color:C.text,fontWeight:600}}>{disc}</span>{cnt>0&&<span style={{fontSize:10,color:C.textDim,marginLeft:8}}>{cnt}q</span>}</div>
+            <div style={{display:"flex",gap:6}}>{PRIORIDADES.map(pr=><button key={pr} onClick={()=>set(disc,pr)} style={{...btn(p===pr?PRIORIDADE_COR[pr]+"22":C.surface2,p===pr?PRIORIDADE_COR[pr]:C.border2,p===pr?PRIORIDADE_COR[pr]:C.textDim),fontSize:11,padding:"5px 10px",borderWidth:p===pr?2:1}}>{PRIORIDADE_LABEL[pr]}</button>)}</div>
+          </div>
+        );})}
+      </div>
+      <div style={{display:"flex",gap:10}}><input value={nova} onChange={e=>setNova(e.target.value)} placeholder="Adicionar disciplina..." style={{...inp,flex:1}} onKeyDown={e=>e.key==="Enter"&&add()}/><button onClick={add} style={{...btn("#2a1060","#4a2a9e",C.accent),whiteSpace:"nowrap"}}>+ Adicionar</button></div>
+    </div>
+  );
+}
+
+// ─── LISTA ────────────────────────────────────────────────────────────────────
+function Lista({data,caderno,upd}) {
+  const [busca,setBusca]=useState("");
+  const [filtroNivel,setFiltroNivel]=useState("Todos");
+  const [filtroDisc,setFiltroDisc]=useState("Todas");
+  const [aberto,setAberto]=useState(null);
+  const [editando,setEditando]=useState(null); // questão sendo editada
+
+  const qc=(data.questoes||[]).filter(q=>q.caderno===caderno);
+  const discs=["Todas",...new Set(qc.map(q=>q.disciplina).filter(Boolean))];
+  const filtradas=qc.filter(q=>{
+    const mb=!busca||[q.enunciado,q.disciplina,q.tema,q.topico,q.gabarito,q.anotacao,q.fonte].filter(Boolean).some(s=>s.toLowerCase().includes(busca.toLowerCase()));
+    const mn=filtroNivel==="Todos"||NIVEIS[q.nivel]===filtroNivel;
+    const md=filtroDisc==="Todas"||q.disciplina===filtroDisc;
+    return mb&&mn&&md;
+  });
+
+  function excluir(id,e) {
+    e.stopPropagation();
+    if(!confirm("Excluir esta questão permanentemente?")) return;
+    upd(d=>({...d,questoes:d.questoes.filter(q=>q.id!==id)}));
+    setAberto(null);
+  }
+
+  function abrirEdicao(q,e) {
+    e.stopPropagation();
+    setEditando({...q, alternativas: q.alternativas?.length>0 ? [...q.alternativas,...Array(4).fill("")].slice(0,4) : ["","","",""]});
+  }
+
+  function salvarEdicao() {
+    if(!editando) return;
+    const alts = editando.alternativas.filter(a=>a.trim());
+    upd(d=>({...d,questoes:d.questoes.map(q=>q.id===editando.id?{...editando,alternativas:alts}:q)}));
+    setEditando(null);
+  }
+
+  return (
+    <div>
+      {/* FILTROS */}
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        <input value={busca} onChange={e=>setBusca(e.target.value)} placeholder="🔍 Buscar enunciado, gabarito, macete, fonte..." style={{...inp,flex:1,minWidth:200}}/>
+        <select value={filtroNivel} onChange={e=>setFiltroNivel(e.target.value)} style={{...inp,width:"auto"}}><option>Todos</option>{NIVEIS.map(n=><option key={n}>{n}</option>)}</select>
+        <select value={filtroDisc} onChange={e=>setFiltroDisc(e.target.value)} style={{...inp,width:"auto"}}>{discs.map(d=><option key={d}>{d}</option>)}</select>
+      </div>
+      <p style={{fontSize:12,color:C.textDim,marginBottom:12}}>{filtradas.length} questão(ões)</p>
+
+      {/* MODAL EDIÇÃO */}
+      {editando&&(
+        <div style={{position:"fixed",inset:0,background:"#000b",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:300,overflowY:"auto",padding:"20px"}}>
+          <div style={{background:"#12121e",border:`1px solid ${C.border2}`,borderRadius:16,padding:24,width:"100%",maxWidth:640,boxShadow:"0 20px 60px #000c",margin:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <h4 style={{margin:0,color:C.accent,fontSize:15}}>✏️ Editar Questão</h4>
+              <button onClick={()=>setEditando(null)} style={{background:"none",border:"none",color:C.textDim,cursor:"pointer",fontSize:20}}>×</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div><Label>DISCIPLINA</Label><input value={editando.disciplina||""} onChange={e=>setEditando(v=>({...v,disciplina:e.target.value}))} style={inp}/></div>
+              <div><Label>TEMA</Label><input value={editando.tema||""} onChange={e=>setEditando(v=>({...v,tema:e.target.value}))} style={inp}/></div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div><Label>TÓPICO</Label><input value={editando.topico||""} onChange={e=>setEditando(v=>({...v,topico:e.target.value}))} style={inp}/></div>
+              <div><Label>FONTE / BANCA</Label><input value={editando.fonte||""} onChange={e=>setEditando(v=>({...v,fonte:e.target.value}))} placeholder="Ex: CESPE 2023..." style={inp}/></div>
+            </div>
+            <div style={{marginBottom:10}}><Label color="#f87171">ENUNCIADO</Label><textarea value={editando.enunciado||""} onChange={e=>setEditando(v=>({...v,enunciado:e.target.value}))} rows={4} style={{...inp,resize:"vertical",lineHeight:1.7}}/></div>
+            {editando.tipo==="multipla"&&<div style={{marginBottom:10}}><Label>ALTERNATIVAS</Label>{editando.alternativas.map((alt,i)=><input key={i} value={alt} onChange={e=>{const a=[...editando.alternativas];a[i]=e.target.value;setEditando(v=>({...v,alternativas:a}));}} placeholder={`Alt. ${String.fromCharCode(65+i)}`} style={{...inp,marginBottom:6}}/>)}</div>}
+            <div style={{marginBottom:10}}><Label color="#4ade80">GABARITO</Label><textarea value={editando.gabarito||""} onChange={e=>setEditando(v=>({...v,gabarito:e.target.value}))} rows={3} style={{...inp,resize:"vertical",lineHeight:1.7}}/></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div><Label color="#f97316">SUA RESPOSTA</Label><input value={editando.suaResposta||""} onChange={e=>setEditando(v=>({...v,suaResposta:e.target.value}))} style={inp}/></div>
+              <div><Label>MACETE</Label><input value={editando.anotacao||""} onChange={e=>setEditando(v=>({...v,anotacao:e.target.value}))} style={inp}/></div>
+            </div>
+            <div style={{marginBottom:10}}><Label>TIPO DE ERRO</Label>
+              <div style={{display:"flex",gap:8}}>
+                {Object.entries(TIPO_ERRO_CONFIG).map(([key,cfg])=>(
+                  <button key={key} onClick={()=>setEditando(v=>({...v,tipoErro:key}))} style={{flex:1,...btn(editando.tipoErro===key?cfg.cor+"22":C.surface2,editando.tipoErro===key?cfg.cor:C.border2,editando.tipoErro===key?cfg.cor:C.textDim),fontSize:12,padding:"8px"}}>
+                    {cfg.icon} {cfg.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:10,marginTop:20}}>
+              <button onClick={salvarEdicao} style={{flex:1,...btn("#2a1060","#4a2a9e",C.accent),padding:"12px",fontSize:14}}>💾 Salvar alterações</button>
+              <button onClick={()=>setEditando(null)} style={{...btn(C.surface2,C.border2,C.textDim),padding:"12px 20px"}}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LISTA */}
+      {filtradas.map(q=>{
+        const pb=(data.prioridadeBanca?.[caderno]||{})[q.disciplina]||"baixa";
+        const tInfo=q.tipoErro?TIPO_ERRO_CONFIG[q.tipoErro]:null;
+        const dInfo=q.destino?DESTINO_CONFIG[q.destino]:null;
+        return(
+          <div key={q.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderLeft:`3px solid ${NIVEL_CORES[NIVEIS[q.nivel]]}`,borderRadius:10,padding:16,marginBottom:10,cursor:"pointer"}} onClick={()=>setAberto(aberto===q.id?null:q.id)}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                  {q.disciplina&&<Tag bg="#3b1f6e22" color="#c8b8e8" border="#3b1f6e44">{q.disciplina}</Tag>}
+                  {q.tema&&<Tag bg="#1e3a5f22" color="#93c5fd" border="#1e3a5f44">{q.tema}</Tag>}
+                  {q.fonte&&<Tag bg="#1a1a0a22" color="#fbbf24" border="#fbbf2440">{q.fonte}</Tag>}
+                  <Pill cor={NIVEL_CORES[NIVEIS[q.nivel]]}>{NIVEIS[q.nivel]}</Pill>
+                  <Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill>
+                  {tInfo&&<Pill cor={tInfo.cor}>{tInfo.icon} {tInfo.label}</Pill>}
+                  {dInfo&&<Pill cor={dInfo.cor}>{dInfo.icon} {dInfo.label}</Pill>}
+                </div>
+                <p style={{margin:0,fontSize:13,color:C.text,lineHeight:1.6}}>{aberto===q.id?q.enunciado:q.enunciado.slice(0,140)+(q.enunciado.length>140?"...":"")}</p>
+              </div>
+              {/* Botões sempre visíveis */}
+              <div style={{display:"flex",gap:6,flexShrink:0}} onClick={e=>e.stopPropagation()}>
+                <button onClick={e=>abrirEdicao(q,e)} style={{...btn(C.surface2,C.border2,C.accent),fontSize:11,padding:"5px 10px"}} title="Editar">✏️</button>
+                <button onClick={e=>excluir(q.id,e)} style={{...btn("#1a0808","#3a1010","#f87171"),fontSize:11,padding:"5px 10px"}} title="Excluir">🗑</button>
+              </div>
+            </div>
+
+            {aberto===q.id&&<div style={{marginTop:14}}>
+              {q.alternativas?.length>0&&<div style={{marginBottom:10}}>{q.alternativas.map((a,i)=><div key={i} style={{fontSize:12,color:C.textDim,padding:"5px 10px",background:C.surface2,borderRadius:6,marginBottom:4}}>{a}</div>)}</div>}
+              <div style={{background:"#071a10",border:"1px solid #0d3020",borderRadius:8,padding:12,marginBottom:8}}>
+                <p style={{margin:"0 0 4px",fontSize:11,color:"#4ade80",fontWeight:700}}>✅ GABARITO</p>
+                <div style={{margin:0,fontSize:13,color:"#d4f0c8",lineHeight:1.7}} dangerouslySetInnerHTML={{__html:q.gabarito?.replace(/\n/g,"<br/>")||""}}/>
+              </div>
+              {q.suaResposta&&<p style={{fontSize:12,color:"#f87171",padding:"7px 10px",background:"#1a0808",borderRadius:7,marginBottom:8}}>❌ {q.suaResposta}</p>}
+              {q.anotacao&&<p style={{fontSize:12,color:"#6668aa",fontStyle:"italic",padding:"7px 10px",background:"#111128",borderRadius:7,marginBottom:8}}>📎 {q.anotacao}</p>}
+              {q.fonte&&<p style={{fontSize:11,color:"#fbbf24",padding:"5px 10px",background:"#1a1a0a",borderRadius:7,marginBottom:8}}>📌 Fonte: {q.fonte}</p>}
+              {q.historico?.length>0&&<div style={{marginBottom:8}}>
+                <p style={{fontSize:11,color:C.textDim,marginBottom:6,fontWeight:700}}>HISTÓRICO</p>
+                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{q.historico.slice(-12).map((h,i)=><span key={i} title={h.data} style={{fontSize:10,padding:"2px 6px",borderRadius:6,background:h.acertou?"#0c2e18":"#2e0c0c",color:h.acertou?"#4ade80":"#f87171"}}>{h.acertou?"✓":"✗"}</span>)}</div>
+              </div>}
+            </div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── METAS ────────────────────────────────────────────────────────────────────
+function Metas({data,caderno,upd}) {
+  const metas=(data.metas||{})[caderno]||{};
+  function set(dia,campo,val){upd(d=>{const m=JSON.parse(JSON.stringify(d.metas||{}));if(!m[caderno])m[caderno]={};if(!m[caderno][dia])m[caderno][dia]={horas:0,questoes:0,descanso:false};m[caderno][dia][campo]=val;return{...d,metas:m};});}
+  return (
+    <div style={{maxWidth:700}}>
+      <h3 style={{margin:"0 0 6px",color:C.accent,fontSize:15}}>⏱ Metas Semanais — {caderno}</h3>
+      <p style={{margin:"0 0 20px",fontSize:12,color:C.textDim}}>O dashboard monitora em tempo real.</p>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {DIAS_SEMANA_FULL.map((dia,i)=>{const m=metas[i]||{horas:0,questoes:0,descanso:false};return(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 18px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",opacity:m.descanso?0.6:1}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.text,minWidth:70}}>{dia}</span>
+            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.textDim,cursor:"pointer"}}><input type="checkbox" checked={!!m.descanso} onChange={e=>set(i,"descanso",e.target.checked)} style={{accentColor:C.accent}}/> Descanso</label>
+            {!m.descanso&&<><label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.textDim}}>⏱<input type="number" min={0} max={12} step={0.5} value={m.horas} onChange={e=>set(i,"horas",parseFloat(e.target.value)||0)} style={{...inp,width:65,padding:"6px 8px"}}/>h</label><label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.textDim}}>📝<input type="number" min={0} max={200} value={m.questoes} onChange={e=>set(i,"questoes",parseInt(e.target.value)||0)} style={{...inp,width:65,padding:"6px 8px"}}/>q</label></>}
+            {m.descanso&&<span style={{fontSize:12,color:"#60a5fa"}}>😴</span>}
+          </div>
+        );})}
+      </div>
+    </div>
+  );
+}
+
+// ─── LEMBRETES ────────────────────────────────────────────────────────────────
+function Lembretes({data,caderno,upd}) {
+  const [form,setForm]=useState({texto:"",data:"",hora:"",turno:"Manhã"});
+  const lems=(data.lembretes||[]).filter(l=>l.caderno===caderno);
+  const F=(k,v)=>setForm(f=>({...f,[k]:v}));
+  function add(){if(!form.texto.trim())return;upd(d=>({...d,lembretes:[...(d.lembretes||[]),{id:Date.now(),caderno,...form,feito:false,criadoEm:hoje()}]}));setForm({texto:"",data:"",hora:"",turno:"Manhã"});}
+  function marcar(id,f){upd(d=>({...d,lembretes:d.lembretes.map(l=>l.id===id?{...l,feito:f}:l)}));}
+  function excluir(id){upd(d=>({...d,lembretes:d.lembretes.filter(l=>l.id!==id)}));}
+  const pend=lems.filter(l=>!l.feito); const conc=lems.filter(l=>l.feito);
+  return (
+    <div style={{maxWidth:600}}>
+      <h3 style={{margin:"0 0 20px",color:C.accent,fontSize:15}}>🔔 Lembretes — {caderno}</h3>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:18,marginBottom:24}}>
+        <Label>NOVO LEMBRETE</Label>
+        <input value={form.texto} onChange={e=>F("texto",e.target.value)} placeholder="O que fazer?" style={{...inp,marginBottom:10}} onKeyDown={e=>e.key==="Enter"&&add()}/>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+          <div><Label>DATA</Label><input type="date" value={form.data} onChange={e=>F("data",e.target.value)} style={inp}/></div>
+          <div><Label>HORA</Label><input type="time" value={form.hora} onChange={e=>F("hora",e.target.value)} style={inp}/></div>
+          <div><Label>TURNO</Label><select value={form.turno} onChange={e=>F("turno",e.target.value)} style={inp}>{TURNOS.map(t=><option key={t}>{t}</option>)}</select></div>
+        </div>
+        <button onClick={add} style={{...btn("#2a1060","#4a2a9e",C.accent),width:"100%",padding:"10px"}}>+ Adicionar</button>
+      </div>
+      {pend.length>0&&<div style={{marginBottom:20}}><p style={{fontSize:12,fontWeight:700,color:C.textDim,marginBottom:8}}>PENDENTES ({pend.length})</p>
+        {pend.map(l=><div key={l.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:12}}>
+          <input type="checkbox" checked={false} onChange={()=>marcar(l.id,true)} style={{accentColor:"#4ade80",width:16,height:16,cursor:"pointer"}}/>
+          <div style={{flex:1}}><p style={{margin:0,fontSize:14,color:C.text}}>{l.texto}</p><div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>{l.data&&<span style={{fontSize:11,color:C.textDim}}>📅 {new Date(l.data+"T12:00").toLocaleDateString("pt-BR")}</span>}{l.hora&&<span style={{fontSize:11,color:C.textDim}}>🕐 {l.hora}</span>}<span style={{fontSize:11,padding:"1px 7px",borderRadius:10,background:l.turno==="Manhã"?"#1e2a0a":l.turno==="Tarde"?"#2a1e0a":"#0a0a2a",color:l.turno==="Manhã"?"#a3e635":l.turno==="Tarde"?"#fb923c":"#818cf8"}}>{l.turno==="Manhã"?"🌅":l.turno==="Tarde"?"☀️":"🌙"} {l.turno}</span></div></div>
+          <button onClick={()=>excluir(l.id)} style={{background:"none",border:"none",color:C.textDim2,cursor:"pointer",fontSize:18}}>×</button>
+        </div>)}
+      </div>}
+      {conc.length>0&&<div><p style={{fontSize:12,fontWeight:700,color:C.textDim2,marginBottom:8}}>CONCLUÍDOS ({conc.length})</p>
+        {conc.map(l=><div key={l.id} style={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 16px",marginBottom:6,display:"flex",alignItems:"center",gap:12,opacity:0.5}}>
+          <input type="checkbox" checked={true} onChange={()=>marcar(l.id,false)} style={{accentColor:"#4ade80",width:16,height:16,cursor:"pointer"}}/>
+          <p style={{margin:0,fontSize:13,color:C.textDim,textDecoration:"line-through",flex:1}}>{l.texto}</p>
+          <button onClick={()=>excluir(l.id)} style={{background:"none",border:"none",color:C.textDim2,cursor:"pointer",fontSize:18}}>×</button>
+        </div>)}
+      </div>}
+      {lems.length===0&&<p style={{color:C.textDim,textAlign:"center",padding:"30px 0",fontSize:13}}>Nenhum lembrete ainda.</p>}
+    </div>
+  );
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+const root = ReactDOM.createRoot(document.getElementById("root"));
+
+function WaitForFirebase() {
+  const [ready, setReady] = useState(!!window._firebase);
+  useEffect(() => {
+    if (window._firebase) return;
+    const handler = () => setReady(true);
+    window.addEventListener("firebase-ready", handler);
+    return () => window.removeEventListener("firebase-ready", handler);
+  }, []);
+  if (!ready) return <div style={{minHeight:"100vh",background:"#08080f",display:"flex",alignItems:"center",justifyContent:"center"}}><p style={{color:"#666680",fontSize:14}}>Inicializando Firebase...</p></div>;
+  return <App />;
+}
+
+root.render(<WaitForFirebase />);
+</script>
+</body>
+</html>
