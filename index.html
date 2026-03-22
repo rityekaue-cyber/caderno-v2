@@ -1052,13 +1052,7 @@ ${c.verso}`,`c_${i}`)}
                         <p style={{fontSize:13,color:"#d4f0c8",margin:0,lineHeight:1.6}}>{c.verso}</p>
                       </div>
                     ))}
-                    <button onClick={()=>copiarFlash(flashcards.classico.cards.map((c,i)=>`CARD ${i+1}
-FRENTE: ${c.frente}
-VERSO: ${c.verso}`).join("
-
----
-
-"),"all_c")}
+                    <button onClick={()=>copiarFlash(flashcards.classico.cards.map((c,i)=>"CARD "+(i+1)+"\nFRENTE: "+c.frente+"\nVERSO: "+c.verso).join("\n\n---\n\n"),"all_c")}
                       style={{...btn("#0c2e18","#1a5030","#4ade80"),width:"100%",padding:"10px",fontSize:12}}>
                       {flashCopiado==="all_c"?"✅ Copiado!":"📋 Copiar os 3 cards de uma vez"}
                     </button>
@@ -1110,13 +1104,7 @@ ${c.verso}`,`p_${i}`)}
                         </div>
                       );
                     })}
-                    <button onClick={()=>copiarFlash(flashcards.profundidade.cards.map(c=>`[${c.nivel}]
-FRENTE: ${c.frente}
-VERSO: ${c.verso}`).join("
-
----
-
-"),"all_p")}
+                    <button onClick={()=>copiarFlash(flashcards.profundidade.cards.map(c=>"["+c.nivel+"]\nFRENTE: "+c.frente+"\nVERSO: "+c.verso).join("\n\n---\n\n"),"all_p")}
                       style={{...btn("#0c2e18","#1a5030","#4ade80"),width:"100%",padding:"10px",fontSize:12}}>
                       {flashCopiado==="all_p"?"✅ Copiado!":"📋 Copiar os 3 cards"}
                     </button>
