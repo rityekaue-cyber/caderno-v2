@@ -1071,9 +1071,7 @@ ${c.verso}`,`c_${i}`)}
                         </button>
                       </div>
                     ))}
-                    <button onClick={()=>copiarFlash(flashcards.cloze.cards.map(c=>c.texto).join("
-
-"),"all_cz")}
+                    <button onClick={()=>copiarFlash(flashcards.cloze.cards.map(c=>c.texto).join("\n\n"),"all_cz")}
                       style={{...btn("#0c2e18","#1a5030","#4ade80"),width:"100%",padding:"10px",fontSize:12}}>
                       {flashCopiado==="all_cz"?"✅ Copiado!":"📋 Copiar os 3 Cloze"}
                     </button>
