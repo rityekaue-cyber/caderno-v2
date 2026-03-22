@@ -721,15 +721,33 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
   const [novaDestino,setNovaDestino]=useState(null);
   const [filtroDisc,setFiltroDisc]=useState("Todas");
   const [filtroTema,setFiltroTema]=useState("Todos");
+  // ① MODO: "erradas" = só pendentes | "misto" = todas incluindo dominadas
+  const [modo,setModo]=useState("erradas");
   const sessaoRef=useRef(Date.now());
 
-  const todasPendentes=[...pendentesHoje(data.questoes||[],caderno)].sort((a,b)=>scoreUrgencia(b,data.prioridadeBanca,caderno)-scoreUrgencia(a,data.prioridadeBanca,caderno));
+  const qc=(data.questoes||[]).filter(q=>q.caderno===caderno);
+
+  // ① Modo Misto inclui todas as questões (não só pendentes hoje)
+  const todasPendentes = modo==="erradas"
+    ? [...pendentesHoje(data.questoes||[],caderno)].sort((a,b)=>scoreUrgencia(b,data.prioridadeBanca,caderno)-scoreUrgencia(a,data.prioridadeBanca,caderno))
+    : [...qc.filter(q=>q.destino!=="arquivada")].sort((a,b)=>scoreUrgencia(b,data.prioridadeBanca,caderno)-scoreUrgencia(a,data.prioridadeBanca,caderno));
+
   const pendentes=todasPendentes.filter(q=>(filtroDisc==="Todas"||q.disciplina===filtroDisc)&&(filtroTema==="Todos"||q.tema===filtroTema));
   const disciplinasDisp=["Todas",...new Set(todasPendentes.map(q=>q.disciplina).filter(Boolean))];
   const temasDisp=["Todos",...new Set(todasPendentes.filter(q=>filtroDisc==="Todas"||q.disciplina===filtroDisc).map(q=>q.tema).filter(Boolean))];
   const q=pendentes[idx];
 
-  useEffect(()=>{setIdx(0);setMostrarGabarito(false);setIaTexto("");setNovaDestino(null);setFiltroDisc("Todas");setFiltroTema("Todos");},[caderno]);
+  // ③ Detectar questões problemáticas (3+ erros no histórico recente)
+  const errosConsecutivos = q ? (()=>{
+    const hist=[...(q.historico||[])].reverse();
+    let c=0; for(const h of hist){if(!h.acertou)c++;else break;}
+    return c;
+  })() : 0;
+
+  // ⑤ Índice de confiança (% de acertos no histórico total)
+  const indiceConfianca = q && q.historico?.length>0 ? Math.round((q.historico.filter(h=>h.acertou).length/q.historico.length)*100) : null;
+
+  useEffect(()=>{setIdx(0);setMostrarGabarito(false);setIaTexto("");setNovaDestino(null);setFiltroDisc("Todas");setFiltroTema("Todos");},[caderno,modo]);
 
   function registrarSessao() {
     const dur=Math.max(1,Math.round((Date.now()-sessaoRef.current)/60000));
@@ -738,22 +756,29 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
     upd(d=>({...d,sessoes:[...(d.sessoes||[]),{data:hoje(),hora:agora.getHours(),duracao_min:dur,caderno}]}));
   }
 
-  function responder(acertou) {
+  // ② responder com 3 opções: acertei / sem certeza / errei
+  function responder(resultado) {
+    // resultado: "acertou" | "semCerteza" | "errou"
     if(!q) return;
     registrarSessao();
     let det=null;
+    const acertou = resultado === "acertou";
+    const semCerteza = resultado === "semCerteza";
     upd(d=>({...d,questoes:d.questoes.map(qst=>{
       if(qst.id!==q.id) return qst;
-      const novoNivel=acertou?Math.min(qst.nivel+1,3):0;
-      const novosAcertos=acertou?(qst.acertosConsecutivos||0)+1:0;
+      // semCerteza: não avança nível mas registra como acerto parcial
+      const novoNivel = semCerteza ? qst.nivel : acertou ? Math.min(qst.nivel+1,3) : 0;
+      const novosAcertos = semCerteza ? 0 : acertou ? (qst.acertosConsecutivos||0)+1 : 0;
       const prox=new Date(); prox.setDate(prox.getDate()+NIVEL_DIAS[NIVEIS[novoNivel]]);
-      const qa={...qst,nivel:novoNivel,acertosConsecutivos:novosAcertos,proximaRevisao:prox.toISOString().split("T")[0],historico:[...(qst.historico||[]),{data:hoje(),acertou,nivel:novoNivel}]};
+      const qa={...qst,nivel:novoNivel,acertosConsecutivos:novosAcertos,
+        proximaRevisao:prox.toISOString().split("T")[0],
+        historico:[...(qst.historico||[]),{data:hoje(),acertou:acertou||semCerteza,semCerteza:semCerteza||false,nivel:novoNivel}]};
       const dest=calcularDestino(qa);
       if(dest&&dest!==qst.destino) det=dest;
       return {...qa,destino:dest};
     })}));
     onQuestaoFeita();
-    if(det) setNovaDestino(det);
+    if(det&&!semCerteza) setNovaDestino(det);
     else{setIdx(i=>i+1);setMostrarGabarito(false);setIaTexto("");}
   }
 
@@ -768,7 +793,26 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
     setIaLoading(false);
   }
 
-  if(pendentes.length===0) return <div style={{textAlign:"center",padding:"60px 20px"}}><div style={{fontSize:52,marginBottom:12}}>✨</div><p style={{fontSize:18,color:"#22c55e",fontWeight:700}}>Nenhuma questão para revisar hoje!</p><p style={{fontSize:13,color:C.textDim}}>Todas em dia! 🎉</p></div>;
+  // ④ Sugestão de modo misto quando zera pendentes
+  if(pendentes.length===0&&modo==="erradas") return (
+    <div style={{textAlign:"center",padding:"60px 20px",maxWidth:560,margin:"0 auto"}}>
+      <div style={{fontSize:52,marginBottom:12}}>✨</div>
+      <p style={{fontSize:18,color:"#22c55e",fontWeight:700,marginBottom:8}}>Nenhuma questão pendente hoje!</p>
+      <p style={{fontSize:13,color:C.textDim,marginBottom:24}}>Você está em dia com todos os erros. Quer testar se realmente domina?</p>
+      <div style={{background:"#071828",border:"2px solid #1a4060",borderRadius:14,padding:20,marginBottom:16}}>
+        <p style={{fontSize:13,fontWeight:700,color:"#60a5fa",margin:"0 0 8px"}}>🔀 Modo Misto</p>
+        <p style={{fontSize:12,color:C.textDim,margin:"0 0 14px",lineHeight:1.6}}>
+          Mistura certas e erradas para revelar questões que você acerta "na cagada" — sem domínio real. 
+          Recomendado quando não há erros pendentes.
+        </p>
+        <button onClick={()=>setModo("misto")} style={{...btn("#071828","#60a5fa","#60a5fa"),width:"100%",padding:"12px",fontSize:14}}>
+          Entrar no Modo Misto →
+        </button>
+      </div>
+      <p style={{fontSize:11,color:C.textDim2}}>{qc.filter(q=>q.destino!=="arquivada").length} questões disponíveis no modo misto</p>
+    </div>
+  );
+  if(pendentes.length===0&&modo==="misto") return <div style={{textAlign:"center",padding:"60px 20px"}}><div style={{fontSize:52,marginBottom:12}}>🏆</div><p style={{fontSize:18,color:"#22c55e",fontWeight:700}}>Revisão mista concluída!</p><p style={{fontSize:13,color:C.textDim}}>Você revisou todas as questões do caderno.</p><button onClick={()=>{setIdx(0);setMostrarGabarito(false);setIaTexto("");}} style={{marginTop:16,...btn(C.surface2,C.border2,C.accent)}}>Revisar novamente</button></div>;
   if(idx>=pendentes.length) return <div style={{textAlign:"center",padding:"60px 20px"}}><div style={{fontSize:52,marginBottom:12}}>🎉</div><p style={{fontSize:18,color:"#22c55e",fontWeight:700}}>Revisão concluída!</p><p style={{fontSize:13,color:C.textDim}}>Você revisou {pendentes.length} questão(ões).</p><button onClick={()=>{setIdx(0);setMostrarGabarito(false);setIaTexto("");setNovaDestino(null);}} style={{marginTop:16,...btn(C.surface2,C.border2,C.accent)}}>Revisar novamente</button></div>;
 
   if(novaDestino){const dc=DESTINO_CONFIG[novaDestino];return(
@@ -786,6 +830,21 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
 
   return (
     <div style={{maxWidth:680,margin:"0 auto"}}>
+
+      {/* ① MODO TOGGLE — Erradas vs Misto */}
+      <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{display:"flex",background:C.surface2,borderRadius:10,padding:3,border:`1px solid ${C.border}`,flex:1}}>
+          <button onClick={()=>{setModo("erradas");setIdx(0);setMostrarGabarito(false);setIaTexto("");}}
+            style={{flex:1,...btn(modo==="erradas"?"#2a0f0f":C.surface2,modo==="erradas"?"#ef4444":C.surface2,modo==="erradas"?"#f87171":C.textDim),fontSize:12,padding:"7px",borderRadius:8,border:"none"}}>
+            🔴 Só Erradas ({pendentesHoje(data.questoes||[],caderno).length})
+          </button>
+          <button onClick={()=>{setModo("misto");setIdx(0);setMostrarGabarito(false);setIaTexto("");}}
+            style={{flex:1,...btn(modo==="misto"?"#0a1a2e":C.surface2,modo==="misto"?"#60a5fa":C.surface2,modo==="misto"?"#93c5fd":C.textDim),fontSize:12,padding:"7px",borderRadius:8,border:"none"}}>
+            🔀 Modo Misto ({qc.filter(q=>q.destino!=="arquivada").length})
+          </button>
+        </div>
+      </div>
+
       {/* FILTROS */}
       <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
         <select value={filtroDisc} onChange={e=>{setFiltroDisc(e.target.value);setFiltroTema("Todos");setIdx(0);setMostrarGabarito(false);setIaTexto("");}}
@@ -798,13 +857,29 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
         </select>
         {(filtroDisc!=="Todas"||filtroTema!=="Todos")&&
           <button onClick={()=>{setFiltroDisc("Todas");setFiltroTema("Todos");setIdx(0);}} style={{...btn(C.surface2,C.border2,C.textDim),fontSize:12,padding:"8px 12px"}}>✕ Limpar</button>}
-        <span style={{fontSize:11,color:C.textDim,alignSelf:"center",whiteSpace:"nowrap"}}>{pendentes.length} pendente(s)</span>
+        <span style={{fontSize:11,color:C.textDim,alignSelf:"center",whiteSpace:"nowrap"}}>{pendentes.length} questão(ões)</span>
       </div>
+
+      {/* ③ ALERTA questão problemática */}
+      {errosConsecutivos>=3&&<div style={{background:"#2a0808",border:"2px solid #ef4444",borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+        <span style={{fontSize:20}}>🚨</span>
+        <div>
+          <p style={{margin:0,fontSize:12,color:"#f87171",fontWeight:700}}>Questão problemática — {errosConsecutivos} erros seguidos!</p>
+          <p style={{margin:"2px 0 0",fontSize:11,color:"#f8717180"}}>Essa é uma lacuna real. Peça a explicação da IA e anote o macete.</p>
+        </div>
+      </div>}
 
       <div style={{marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:C.textDim,marginBottom:6}}>
           <span>{idx+1} / {pendentes.length}</span>
-          <div style={{display:"flex",gap:6}}><Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill><Pill cor={NIVEL_CORES[NIVEIS[q?.nivel||0]]}>{NIVEIS[q?.nivel||0]}</Pill></div>
+          <div style={{display:"flex",gap:6}}>
+            <Pill cor={PRIORIDADE_COR[pb]}>{PRIORIDADE_LABEL[pb]}</Pill>
+            <Pill cor={NIVEL_CORES[NIVEIS[q?.nivel||0]]}>{NIVEIS[q?.nivel||0]}</Pill>
+            {/* ⑤ Índice de confiança */}
+            {indiceConfianca!==null&&<Pill cor={indiceConfianca>=70?"#22c55e":indiceConfianca>=50?"#eab308":"#ef4444"}>
+              {indiceConfianca}% conf.
+            </Pill>}
+          </div>
         </div>
         <div style={{background:C.border,borderRadius:4,height:4}}><div style={{background:`linear-gradient(90deg,${C.accentDark},${C.accent})`,height:"100%",width:`${(idx/pendentes.length)*100}%`,borderRadius:4,transition:"width .3s"}}/></div>
       </div>
@@ -834,9 +909,19 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
             <div style={{margin:0,fontSize:14,color:"#d4f0c8",lineHeight:1.85}} dangerouslySetInnerHTML={{__html: q?.gabarito?.replace(/\n/g,"<br/>") || ""}} />
           </div>
           {q?.suaResposta&&<div style={{background:"#1a0808",border:"1px solid #2e1010",borderRadius:10,padding:12,marginBottom:12}}><p style={{margin:"0 0 4px",fontSize:11,color:"#f87171",fontWeight:700}}>❌ SUA RESPOSTA</p><p style={{margin:0,fontSize:13,color:"#f0c8c8"}}>{q.suaResposta}</p></div>}
-          <div style={{display:"flex",gap:10,marginBottom:12}}>
-            <button onClick={()=>responder(true)} style={{flex:1,...btn("#0c2e18","#1a5030","#4ade80"),padding:"13px",fontSize:15}}>✓ Acertei</button>
-            <button onClick={()=>responder(false)} style={{flex:1,...btn("#2e0c0c","#501a1a","#f87171"),padding:"13px",fontSize:15}}>✗ Errei</button>
+          {/* ② TRÊS BOTÕES: acertei / sem certeza / errei */}
+          <div style={{display:"flex",gap:8,marginBottom:12,flexDirection:"column"}}>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>responder("acertou")} style={{flex:1,...btn("#0c2e18","#1a5030","#4ade80"),padding:"13px",fontSize:14,fontWeight:700}}>✓ Acertei</button>
+              <button onClick={()=>responder("errou")} style={{flex:1,...btn("#2e0c0c","#501a1a","#f87171"),padding:"13px",fontSize:14,fontWeight:700}}>✗ Errei</button>
+            </div>
+            <button onClick={()=>responder("semCerteza")}
+              style={{width:"100%",...btn("#1a1a0a","#4a3a00","#fbbf24"),padding:"10px",fontSize:13,fontWeight:600}}>
+              ⚠️ Acertei sem certeza — não avança nível
+            </button>
+            <p style={{fontSize:10,color:C.textDim2,textAlign:"center",margin:"-4px 0 0"}}>
+              Use quando acertou mas não tinha certeza — evita o "acerto na cagada" chegar ao Anki sem domínio real
+            </p>
           </div>
           <button onClick={pedirIA} disabled={iaLoading} style={{width:"100%",...btn("#130d24","#2e1e5c",iaLoading?C.textDim:C.accent),padding:"11px"}}>
             {iaLoading?"🤖 Analisando...":"🤖 Pedir explicação completa à IA"}
