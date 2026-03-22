@@ -719,6 +719,10 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
   const [iaExpandido,setIaExpandido]=useState(true);
   const [copiado,setCopiado]=useState(false);
   const [novaDestino,setNovaDestino]=useState(null);
+  const [flashcards,setFlashcards]=useState(null);
+  const [flashLoading,setFlashLoading]=useState(false);
+  const [flashForma,setFlashForma]=useState(null); // "classico"|"cloze"|"profundidade"
+  const [flashCopiado,setFlashCopiado]=useState(null);
   const [filtroDisc,setFiltroDisc]=useState("Todas");
   const [filtroTema,setFiltroTema]=useState("Todos");
   // ① MODO: "erradas" = só pendentes | "misto" = todas incluindo dominadas
@@ -781,6 +785,58 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
     if(det&&!semCerteza) setNovaDestino(det);
     else{setIdx(i=>i+1);setMostrarGabarito(false);setIaTexto("");}
   }
+
+  async function gerarFlashcards() {
+    if(!q) return;
+    setFlashLoading(true); setFlashcards(null); setFlashForma(null);
+    try {
+      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,
+          messages:[{role:"user",content:`Sou concurseira do TCE-RJ. Gere 3 flashcards Anki para esta questão em JSON puro (sem markdown):
+
+Disciplina: ${q.disciplina||""}
+Tema: ${q.tema||""}
+Enunciado: ${q.enunciado}
+Gabarito: ${q.gabarito}
+Macete: ${q.anotacao||""}
+
+Retorne APENAS este JSON:
+{
+  "classico": {
+    "nome": "Clássico + Conceito + Pegadinha",
+    "cards": [
+      {"frente": "...", "verso": "..."},
+      {"frente": "conceito central direto", "verso": "definição/regra completa"},
+      {"frente": "o erro que cometi como pergunta", "verso": "por que está errado + correto"}
+    ]
+  },
+  "cloze": {
+    "nome": "Método Cloze (lacunas)",
+    "cards": [
+      {"texto": "frase com {{c1::resposta}} para preencher"},
+      {"texto": "frase com {{c1::resposta}} para preencher"},
+      {"texto": "frase com {{c1::resposta}} para preencher"}
+    ]
+  },
+  "profundidade": {
+    "nome": "Por Profundidade",
+    "cards": [
+      {"nivel": "Superficial", "frente": "fato direto que cai em prova", "verso": "resposta objetiva"},
+      {"nivel": "Intermediário", "frente": "raciocínio por trás da regra", "verso": "explicação do porquê"},
+      {"nivel": "Profundo", "frente": "exceção ou pegadinha que a banca usa", "verso": "como identificar e responder"}
+    ]
+  }
+}`}]})});
+      const j=await r.json();
+      const txt=j.content?.[0]?.text||"{}";
+      const parsed=JSON.parse(txt.replace(/\`\`\`json|\`\`\`/g,"").trim());
+      setFlashcards(parsed);
+      setFlashForma("profundidade"); // default
+    } catch(e){alert("Erro ao gerar flashcards: "+e.message);}
+    setFlashLoading(false);
+  }
+
+  function copiarFlash(texto,key){navigator.clipboard.writeText(texto).then(()=>{setFlashCopiado(key);setTimeout(()=>setFlashCopiado(null),2000);});}
 
   async function pedirIA() {
     if(!q) return;
@@ -923,9 +979,14 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
               Use quando acertou mas não tinha certeza — evita o "acerto na cagada" chegar ao Anki sem domínio real
             </p>
           </div>
-          <button onClick={pedirIA} disabled={iaLoading} style={{width:"100%",...btn("#130d24","#2e1e5c",iaLoading?C.textDim:C.accent),padding:"11px"}}>
-            {iaLoading?"🤖 Analisando...":"🤖 Pedir explicação completa à IA"}
-          </button>
+          <div style={{display:"flex",gap:8,marginBottom:0}}>
+            <button onClick={pedirIA} disabled={iaLoading} style={{flex:1,...btn("#130d24","#2e1e5c",iaLoading?C.textDim:C.accent),padding:"11px",fontSize:13}}>
+              {iaLoading?"🤖 Analisando...":"🤖 Explicação da IA"}
+            </button>
+            <button onClick={gerarFlashcards} disabled={flashLoading} style={{flex:1,...btn("#0a1a0a","#1a4a00",flashLoading?C.textDim:"#86efac"),padding:"11px",fontSize:13}}>
+              {flashLoading?"🃏 Gerando...":"🃏 3 Flashcards Anki"}
+            </button>
+          </div>
           {iaTexto&&(
             <div style={{marginTop:14,background:"#0c0c1e",border:"1px solid #2a1e50",borderRadius:12,overflow:"hidden"}}>
               <div style={{padding:"12px 18px",borderBottom:"1px solid #1e1a38",display:"flex",alignItems:"center",gap:10,justifyContent:"space-between",background:"#0f0f20"}}>
@@ -951,6 +1012,117 @@ function Revisao({data,caderno,upd,onQuestaoFeita}) {
                   })}
                 </div>
               </div>}
+            </div>
+          )}
+
+          {/* ─── FLASHCARDS ANKI ─── */}
+          {flashcards&&(
+            <div style={{marginTop:14,background:"#071a10",border:"1px solid #0d3020",borderRadius:12,overflow:"hidden"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #0d3020",background:"#071a10",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+                <span style={{fontSize:11,color:"#4ade80",fontWeight:700}}>🃏 3 FLASHCARDS MESTRES — ANKI</span>
+                <div style={{display:"flex",gap:6}}>
+                  {["classico","cloze","profundidade"].map(f=>(
+                    <button key={f} onClick={()=>setFlashForma(f)}
+                      style={{...btn(flashForma===f?"#0c2e18":C.surface2,flashForma===f?"#22c55e":C.border2,flashForma===f?"#4ade80":C.textDim),fontSize:10,padding:"4px 10px"}}>
+                      {f==="classico"?"Clássico":f==="cloze"?"Cloze":"Profundidade"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{padding:"14px 18px"}}>
+                {flashForma==="classico"&&flashcards.classico&&(
+                  <div>
+                    <p style={{fontSize:11,color:C.textDim,marginBottom:10}}>{flashcards.classico.nome}</p>
+                    {flashcards.classico.cards.map((c,i)=>(
+                      <div key={i} style={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:12,marginBottom:8}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                          <span style={{fontSize:10,color:C.textDim,fontWeight:700}}>CARD {i+1}</span>
+                          <button onClick={()=>copiarFlash(`FRENTE:
+${c.frente}
+
+VERSO:
+${c.verso}`,`c_${i}`)}
+                            style={{...btn(C.surface,C.border2,flashCopiado===`c_${i}`?"#4ade80":C.textDim),fontSize:10,padding:"3px 8px"}}>
+                            {flashCopiado===`c_${i}`?"✅":"📋 Copiar"}
+                          </button>
+                        </div>
+                        <p style={{fontSize:12,color:"#60a5fa",margin:"0 0 4px",fontWeight:600}}>▸ Frente:</p>
+                        <p style={{fontSize:13,color:C.text,margin:"0 0 8px",lineHeight:1.6}}>{c.frente}</p>
+                        <p style={{fontSize:12,color:"#4ade80",margin:"0 0 4px",fontWeight:600}}>▸ Verso:</p>
+                        <p style={{fontSize:13,color:"#d4f0c8",margin:0,lineHeight:1.6}}>{c.verso}</p>
+                      </div>
+                    ))}
+                    <button onClick={()=>copiarFlash(flashcards.classico.cards.map((c,i)=>`CARD ${i+1}
+FRENTE: ${c.frente}
+VERSO: ${c.verso}`).join("
+
+---
+
+"),"all_c")}
+                      style={{...btn("#0c2e18","#1a5030","#4ade80"),width:"100%",padding:"10px",fontSize:12}}>
+                      {flashCopiado==="all_c"?"✅ Copiado!":"📋 Copiar os 3 cards de uma vez"}
+                    </button>
+                  </div>
+                )}
+                {flashForma==="cloze"&&flashcards.cloze&&(
+                  <div>
+                    <p style={{fontSize:11,color:C.textDim,marginBottom:6}}>{flashcards.cloze.nome}</p>
+                    <p style={{fontSize:11,color:C.textDim2,marginBottom:10}}>Cole direto no Anki → tipo "Cloze". O texto entre {"{{"+"c1::"+"}"+"}"} vira a lacuna.</p>
+                    {flashcards.cloze.cards.map((c,i)=>(
+                      <div key={i} style={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:12,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                        <p style={{fontSize:13,color:C.text,margin:0,lineHeight:1.6,flex:1}}>{c.texto}</p>
+                        <button onClick={()=>copiarFlash(c.texto,`cz_${i}`)}
+                          style={{...btn(C.surface,C.border2,flashCopiado===`cz_${i}`?"#4ade80":C.textDim),fontSize:10,padding:"3px 8px",flexShrink:0}}>
+                          {flashCopiado===`cz_${i}`?"✅":"📋"}
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={()=>copiarFlash(flashcards.cloze.cards.map(c=>c.texto).join("
+
+"),"all_cz")}
+                      style={{...btn("#0c2e18","#1a5030","#4ade80"),width:"100%",padding:"10px",fontSize:12}}>
+                      {flashCopiado==="all_cz"?"✅ Copiado!":"📋 Copiar os 3 Cloze"}
+                    </button>
+                  </div>
+                )}
+                {flashForma==="profundidade"&&flashcards.profundidade&&(
+                  <div>
+                    <p style={{fontSize:11,color:C.textDim,marginBottom:10}}>{flashcards.profundidade.nome}</p>
+                    {flashcards.profundidade.cards.map((c,i)=>{
+                      const nivelCor=i===0?"#60a5fa":i===1?"#eab308":"#a78bfa";
+                      return(
+                        <div key={i} style={{background:C.surface2,border:`1px solid ${nivelCor}40`,borderLeft:`3px solid ${nivelCor}`,borderRadius:8,padding:12,marginBottom:8}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <span style={{fontSize:11,color:nivelCor,fontWeight:700}}>{'🔹🔶💎'[i]} {c.nivel}</span>
+                            <button onClick={()=>copiarFlash(`FRENTE:
+${c.frente}
+
+VERSO:
+${c.verso}`,`p_${i}`)}
+                              style={{...btn(C.surface,C.border2,flashCopiado===`p_${i}`?"#4ade80":C.textDim),fontSize:10,padding:"3px 8px"}}>
+                              {flashCopiado===`p_${i}`?"✅":"📋 Copiar"}
+                            </button>
+                          </div>
+                          <p style={{fontSize:12,color:"#60a5fa",margin:"0 0 4px",fontWeight:600}}>▸ Frente:</p>
+                          <p style={{fontSize:13,color:C.text,margin:"0 0 8px",lineHeight:1.6}}>{c.frente}</p>
+                          <p style={{fontSize:12,color:"#4ade80",margin:"0 0 4px",fontWeight:600}}>▸ Verso:</p>
+                          <p style={{fontSize:13,color:"#d4f0c8",margin:0,lineHeight:1.6}}>{c.verso}</p>
+                        </div>
+                      );
+                    })}
+                    <button onClick={()=>copiarFlash(flashcards.profundidade.cards.map(c=>`[${c.nivel}]
+FRENTE: ${c.frente}
+VERSO: ${c.verso}`).join("
+
+---
+
+"),"all_p")}
+                      style={{...btn("#0c2e18","#1a5030","#4ade80"),width:"100%",padding:"10px",fontSize:12}}>
+                      {flashCopiado==="all_p"?"✅ Copiado!":"📋 Copiar os 3 cards"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1038,11 +1210,57 @@ function RichEditor({ value, onChange, placeholder }) {
 // ─── ADICIONAR ────────────────────────────────────────────────────────────────
 function Adicionar({data,caderno,upd,onAdded}) {
   const [form,setForm]=useState({tipo:"multipla",disciplina:"",tema:"",topico:"",enunciado:"",alternativas:["","","",""],gabarito:"",suaResposta:"",anotacao:"",imagem:null,tipoErro:"",fonte:""});
+  const [lendoImagem,setLendoImagem]=useState(false);
   const fileRef=useRef();
   const F=(k,v)=>setForm(f=>({...f,[k]:v}));
   const setAlt=(i,v)=>setForm(f=>{const a=[...f.alternativas];a[i]=v;return{...f,alternativas:a};});
+
   function handleImg(e){const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>F("imagem",ev.target.result);r.readAsDataURL(file);}
   function handleDrop(e){e.preventDefault();const file=e.dataTransfer.files[0];if(!file||!file.type.startsWith("image/"))return;const r=new FileReader();r.onload=ev=>F("imagem",ev.target.result);r.readAsDataURL(file);}
+
+  async function lerQuestaoComIA() {
+    if(!form.imagem){alert("Adicione uma imagem primeiro!");return;}
+    setLendoImagem(true);
+    try {
+      const base64 = form.imagem.split(",")[1];
+      const mediaType = form.imagem.split(";")[0].split(":")[1];
+      const r = await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-20250514", max_tokens:2000,
+          messages:[{role:"user",content:[
+            {type:"image",source:{type:"base64",media_type:mediaType,data:base64}},
+            {type:"text",text:`Você é um assistente especializado em concursos públicos brasileiros. Analise essa imagem de questão de prova e extraia as informações em JSON puro (sem markdown, sem explicações, só o JSON):
+{
+  "enunciado": "texto completo do enunciado",
+  "alternativas": ["A) ...", "B) ...", "C) ...", "D) ...", "E) ..."],
+  "tipo": "multipla" ou "vf" ou "discursiva",
+  "disciplina": "disciplina identificada ou vazio",
+  "tema": "tema identificado ou vazio",
+  "fonte": "banca e ano se visível na imagem ou vazio"
+}
+Se for V/F, alternativas = ["Verdadeiro","Falso"]. Se discursiva, alternativas = []. Retorne APENAS o JSON, sem mais nada.`}
+          ]}]
+        })
+      });
+      const j = await r.json();
+      const txt = j.content?.[0]?.text||"{}";
+      const parsed = JSON.parse(txt.replace(/```json|```/g,"").trim());
+      if(parsed.enunciado) {
+        setForm(f=>({...f,
+          enunciado: parsed.enunciado||f.enunciado,
+          alternativas: parsed.alternativas?.length>0 ? [...parsed.alternativas,...Array(4).fill("")].slice(0,4) : f.alternativas,
+          tipo: parsed.tipo||f.tipo,
+          disciplina: parsed.disciplina||f.disciplina,
+          tema: parsed.tema||f.tema,
+          fonte: parsed.fonte||f.fonte,
+        }));
+        alert("✅ Questão lida! Verifique os campos e complete o gabarito antes de salvar.");
+      } else { alert("Não consegui extrair a questão. Tente uma imagem mais nítida."); }
+    } catch(e){ alert("Erro ao ler imagem: "+e.message); }
+    setLendoImagem(false);
+  }
+
   function salvar(){
     if(!form.enunciado.trim()||!form.gabarito.trim()){alert("Preencha o enunciado e o gabarito!");return;}
     if(!form.tipoErro){alert("Classifique o tipo de erro!");return;}
@@ -1088,7 +1306,20 @@ function Adicionar({data,caderno,upd,onAdded}) {
         <div><Label>MACETE</Label><input value={form.anotacao} onChange={e=>F("anotacao",e.target.value)} placeholder="Dica para memorizar..." style={inp}/></div>
       </div>
       <div style={{marginBottom:10}}><Label>FONTE / BANCA</Label><input value={form.fonte||""} onChange={e=>F("fonte",e.target.value)} placeholder="Ex: CESPE 2023, FGV 2022, Simulado..." style={inp}/></div>
-      <div style={{marginBottom:20}}><Label>IMAGEM</Label><div onDrop={handleDrop} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current?.click()} style={{border:`2px dashed ${C.border2}`,borderRadius:10,padding:"16px",textAlign:"center",cursor:"pointer",background:C.surface2}}>{form.imagem?<div><img src={form.imagem} alt="preview" style={{maxHeight:100,borderRadius:8}}/><button onClick={e=>{e.stopPropagation();F("imagem",null);}} style={{display:"block",margin:"6px auto 0",...btn("#2e0c0c","#501a1a","#f87171"),fontSize:11}}>Remover</button></div>:<p style={{fontSize:12,color:C.textDim,margin:0}}>🖼 Arraste ou clique</p>}</div><input ref={fileRef} type="file" accept="image/*" onChange={handleImg} style={{display:"none"}}/></div>
+      <div style={{marginBottom:20}}>
+        <Label>📸 PRINT DA QUESTÃO — a IA lê e preenche os campos automaticamente</Label>
+        <div onDrop={handleDrop} onDragOver={e=>e.preventDefault()} onClick={()=>fileRef.current?.click()}
+          style={{border:`2px dashed ${C.border2}`,borderRadius:10,padding:"16px",textAlign:"center",cursor:"pointer",background:C.surface2,marginBottom:8}}>
+          {form.imagem
+            ? <div><img src={form.imagem} alt="preview" style={{maxHeight:120,borderRadius:8}}/><button onClick={e=>{e.stopPropagation();F("imagem",null);}} style={{display:"block",margin:"6px auto 0",...btn("#2e0c0c","#501a1a","#f87171"),fontSize:11}}>Remover</button></div>
+            : <div><p style={{fontSize:24,marginBottom:6}}>📸</p><p style={{fontSize:12,color:C.textDim,margin:0}}>Arraste o print da questão ou clique para selecionar</p><p style={{fontSize:11,color:C.textDim2,marginTop:4}}>A IA vai ler e preencher o enunciado e alternativas automaticamente</p></div>}
+        </div>
+        {form.imagem&&<button onClick={lerQuestaoComIA} disabled={lendoImagem}
+          style={{...btn(lendoImagem?"#0a0a1e":"#0d1a30",lendoImagem?C.border:"#1a4060",lendoImagem?C.textDim:"#60a5fa"),width:"100%",padding:"11px",fontSize:13}}>
+          {lendoImagem?"🤖 Lendo questão com IA...":"🤖 Ler questão com IA — preencher campos automaticamente"}
+        </button>}
+        <input ref={fileRef} type="file" accept="image/*" onChange={handleImg} style={{display:"none"}}/>
+      </div>
       <button onClick={salvar} style={{width:"100%",background:"linear-gradient(135deg,#2a1060,#1a2a60)",border:"1px solid #4a2a9e",color:"#d8c8ff",padding:"14px",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:700,fontFamily:"inherit"}}>➕ Salvar no Caderno "{caderno}"</button>
     </div>
   );
