@@ -1,0 +1,1 @@
+{ "name": "controle-financeiro", "version": "1.0.0", "private": true, "description": "Meu Controle Financeiro — app pessoal em HTML/JS puro", "scripts": { "build": "node build.js", "test": "node tests/test-mandatorios.js" } }
